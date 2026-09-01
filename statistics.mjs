@@ -73,21 +73,11 @@ export function summarizeDistribution(values, { logarithmic = false } = {}) {
 
 export function selectedStatistics(analytics, range, summarize) {
   const latestClosures = new Map();
-  let created = 0;
-  let reopened = 0;
-  let closed = 0;
   if (range) {
     for (const closure of analytics.closures) {
       if (closure.at > range.end) break;
       if (closure.at >= range.start)
         latestClosures.set(closure.number, closure);
-    }
-    for (const event of analytics.issueActivity) {
-      if (event.at > range.end) break;
-      if (event.at < range.start) continue;
-      if (event.type === "created") created++;
-      else if (event.type === "reopened") reopened++;
-      else if (event.type === "closed") closed++;
     }
   }
   const durations = { issue: [], pr: [] };
@@ -95,7 +85,8 @@ export function selectedStatistics(analytics, range, summarize) {
   for (const closure of latestClosures.values()) {
     const duration = (closure.at - closure.created) / 86400000;
     durations[closure.kind].push(duration);
-    ranked[closure.kind].push({ ...closure, duration });
+    if (closure.hasAdditionalInteraction === true)
+      ranked[closure.kind].push({ ...closure, duration });
   }
   const rankings = {};
   for (const kind of ["issue", "pr"]) {
@@ -110,21 +101,46 @@ export function selectedStatistics(analytics, range, summarize) {
     };
   }
   const days = range ? (range.end - range.start) / 86400000 : 0;
-  const net = created + reopened - closed;
-  const perDay = days > 0 ? net / days : null;
+  const rates = (total) => {
+    const perDay = days > 0 ? total / days : null;
+    return {
+      total,
+      perDay,
+      perWeek: perDay === null ? null : perDay * 7,
+      perMonth: perDay === null ? null : perDay * 30,
+    };
+  };
+  const summarizeFlow = (activity) => {
+    let created = 0;
+    let reopened = 0;
+    let closed = 0;
+    if (range) {
+      for (const event of activity) {
+        if (event.at > range.end) break;
+        if (event.at < range.start) continue;
+        if (event.type === "created") created++;
+        else if (event.type === "reopened") reopened++;
+        else if (event.type === "closed") closed++;
+      }
+    }
+    const { total: net, ...netRates } = rates(created + reopened - closed);
+    return { created, reopened, closed, net, days, ...netRates };
+  };
+  const flow = summarizeFlow(analytics.issueActivity);
+  const prFlow = summarizeFlow(analytics.prActivity);
+  const turnaround = (flow) => ({
+    opened: rates(flow.created + flow.reopened),
+    closed: rates(flow.closed),
+  });
   return {
     issues: summarize(durations.issue, { logarithmic: true }),
     prs: summarize(durations.pr, { logarithmic: true }),
     rankings,
-    flow: {
-      created,
-      reopened,
-      closed,
-      net,
-      days,
-      perDay,
-      perWeek: perDay === null ? null : perDay * 7,
-      perMonth: perDay === null ? null : perDay * 30,
+    flow,
+    prFlow,
+    turnaround: {
+      issues: turnaround(flow),
+      prs: turnaround(prFlow),
     },
   };
 }

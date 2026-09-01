@@ -19,6 +19,10 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
     items: [
       {
         number: 1,
+        author: "opener",
+        authorIsBot: false,
+        hasSpamLabel: false,
+        hasAdditionalInteraction: true,
         title: 'Fix </script><img src=x onerror=alert(1)> & "examples"',
         kind: "issue",
         createdAt: "2026-08-04T12:00:00Z",
@@ -27,8 +31,13 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
       },
       {
         number: 2,
+        author: null,
+        authorIsBot: false,
+        hasSpamLabel: false,
+        hasAdditionalInteraction: false,
         title: "Update documentation",
         kind: "pr",
+        targetBranch: "main",
         createdAt: "2026-08-31T11:59:59Z",
         closedAt: null,
         events: [],
@@ -123,7 +132,8 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(issueRanking[0].children[1].children[0].rel, "noopener noreferrer");
   assert.equal(issueRanking[0].children[2].textContent, "1 s");
   assert.equal(issueRanking[0].children[4].children[0].dateTime, "2026-08-04T12:00:01.000Z");
-  assert.equal(get("#ranking-pr-shortest").children[0].children[0].textContent, "No PRs closed in this period.");
+  assert.equal(issueRanking[0].children[5].textContent, "@opener");
+  assert.equal(get("#ranking-pr-shortest").children[0].children[0].textContent, "No PRs with additional interaction closed in this period.");
   assert.equal(get("#duration-prs-count").textContent, "0");
   assert.equal(get("#duration-prs-average").textContent, "—");
   assert.equal(get("#age-issues-count").textContent, "0");
@@ -131,6 +141,11 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#age-prs-median").textContent, "1 s");
   assert.equal(histograms.get("age-prs-histogram").series[0].y[0], 1);
   assert.equal(get("#flow-total").textContent, "0");
+  assert.equal(get("#pr-flow-total").textContent, "+1");
+  assert.equal(get("#turnaround-issues-opened-total").textContent, "1");
+  assert.equal(get("#turnaround-issues-closed-total").textContent, "1");
+  assert.equal(get("#turnaround-prs-opened-total").textContent, "1");
+  assert.equal(get("#turnaround-prs-closed-total").textContent, "0");
   assert.equal(histograms.get("duration-issues-histogram").series[0].y[0], 1);
   const closeAxis = histograms.get("duration-issues-histogram").layout.xaxis;
   assert.equal(closeAxis.type, "log");
@@ -166,7 +181,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#openIssues-min-count").textContent, "1");
   assert.equal(get("#duration-issues-count").textContent, "0");
   assert.equal(get("#duration-issues-min").textContent, "—");
-  assert.equal(get("#ranking-issue-longest").children[0].children[0].textContent, "No issues closed in this period.");
+  assert.equal(get("#ranking-issue-longest").children[0].children[0].textContent, "No issues with additional interaction closed in this period.");
   assert.deepEqual(
     [...histograms.get("duration-issues-histogram").series[0].y],
     [],
@@ -189,6 +204,26 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   listeners.plotly_relayout({ "xaxis.range": graph.layout.xaxis.range });
   assert.equal(get("#sample-precision").textContent, "Hourly samples");
   assert.equal(get("#sample-count").textContent, "169");
+  assert.equal(get("#flow-total").textContent, "0");
+  assert.equal(get("#pr-flow-week").textContent, "+1");
+  assert.equal(get("#turnaround-issues-opened-total").textContent, "0");
+  assert.equal(get("#turnaround-issues-closed-total").textContent, "0");
+  assert.equal(get("#turnaround-prs-opened-week").textContent, "1");
+  assert.equal(get("#turnaround-prs-opened-month").textContent, "4.286");
+  assert.equal(get("#turnaround-prs-closed-day").textContent, "0");
+
+  listeners.plotly_selected({
+    range: { x: ["2026-08-31T11:59:59Z", "2026-08-31T11:59:59Z"] },
+    points: [],
+  });
+  assert.equal(get("#pr-flow-total").textContent, "+1");
+  assert.equal(get("#pr-flow-day").textContent, "—");
+  assert.equal(get("#turnaround-prs-opened-total").textContent, "1");
+  assert.equal(get("#turnaround-prs-opened-day").textContent, "—");
+  assert.equal(get("#turnaround-issues-closed-month").textContent, "—");
+  assert.match(get("#pr-flow-detail").textContent, /nonzero interval/);
+  listeners.plotly_deselect();
+  assert.equal(get("#pr-flow-week").textContent, "+1");
 
   graph.layout.xaxis.range = ["2027-01-01", "2027-01-02"];
   listeners.plotly_relayout({
@@ -199,6 +234,12 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#openIssues-max-time").dateTime, undefined);
   assert.match(get("#range-period").textContent, /outside/);
   assert.equal(get("#flow-day").textContent, "—");
+  for (const period of ["total", "day", "week", "month"]) {
+    assert.equal(get(`#pr-flow-${period}`).textContent, "—");
+    for (const kind of ["issues", "prs"])
+      for (const direction of ["opened", "closed"])
+        assert.equal(get(`#turnaround-${kind}-${direction}-${period}`).textContent, "—");
+  }
   assert.equal(get("#duration-issues-count").textContent, "0");
 
   graph.layout.xaxis.range = [history.startAt, history.asOf];
@@ -239,6 +280,9 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   );
   assert.equal(get("#sample-precision").textContent, "Hourly samples");
   assert.equal(get("#openPRs-max-count").textContent, "1");
+  assert.equal(get("#pr-flow-total").textContent, "+1");
+  assert.equal(get("#turnaround-prs-opened-total").textContent, "1");
+  assert.equal(get("#turnaround-issues-closed-total").textContent, "0");
   const validRange = [...graph.layout.xaxis.range];
   for (const [start, end, message] of [
     ["", "2026-08-31", /both/],

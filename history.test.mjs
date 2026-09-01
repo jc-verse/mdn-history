@@ -7,7 +7,12 @@ const at = (day, time = "12:00:00") =>
 const item = (number, kind, createdAt, events = [], closedAt = null) => ({
   number,
   title: `Item ${number}`,
+  author: "opener",
+  authorIsBot: false,
+  hasSpamLabel: false,
+  hasAdditionalInteraction: true,
   kind,
+  ...(kind === "pr" ? { targetBranch: "main" } : {}),
   createdAt,
   events,
   closedAt,
@@ -160,4 +165,30 @@ test("every item requires a nonempty title, including open items", () => {
       /Missing title for #7/,
     );
   }
+});
+
+test("old offline snapshots require a backfill instead of silently excluding unknown interaction", () => {
+  const old = item(1, "issue", at(1));
+  delete old.hasAdditionalInteraction;
+  assert.throws(() => buildHistory(snapshot([old])), /Run without --offline to backfill/);
+  assert.doesNotThrow(() => buildHistory(snapshot([{ ...old, author: null, hasAdditionalInteraction: false }])));
+  for (const field of ["authorIsBot", "hasSpamLabel"]) {
+    const missing = item(2, "issue", at(1));
+    delete missing[field];
+    assert.throws(() => buildHistory(snapshot([missing])), /bot\/spam/);
+  }
+});
+
+test("non-main PRs have no effect on any history, date coverage, ages, closures, or activity", () => {
+  const included = [item(1, "issue", at(1)), item(2, "pr", at(2), [event("MergedEvent", 5)], at(5))];
+  const excluded = [
+    { ...item(3, "pr", "2010-01-01T00:00:00Z"), targetBranch: "release" },
+    { ...item(4, "pr", at(3), [], at(4)), targetBranch: "master" },
+    { ...item(5, "pr", at(3), [event("ClosedEvent", 4), event("ReopenedEvent", 6)]), targetBranch: "Main" },
+  ];
+  assert.deepEqual(buildHistory(snapshot([...included, ...excluded])), buildHistory(snapshot(included)));
+  assert.equal(buildHistory(snapshot(included)).analytics.closures[0].targetBranch, "main");
+  const unknown = { ...item(6, "pr", at(1)) };
+  delete unknown.targetBranch;
+  assert.throws(() => buildHistory(snapshot([unknown])), /Missing target branch/);
 });

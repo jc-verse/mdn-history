@@ -9,7 +9,12 @@ const ms = (day, time) => Date.parse(at(day, time));
 const item = (number, kind, createdAt, events = [], closedAt = null) => ({
   number,
   title: `Item ${number}`,
+  author: "opener",
+  authorIsBot: false,
+  hasSpamLabel: false,
+  hasAdditionalInteraction: true,
   kind,
+  ...(kind === "pr" ? { targetBranch: "main" } : {}),
   createdAt,
   events,
   closedAt,

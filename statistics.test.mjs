@@ -10,7 +10,12 @@ const event = (type, days) => ({ type, at: at(days) });
 const item = (number, kind, created, events = [], closed = null) => ({
   number,
   title: `Item ${number}`,
+  author: "opener",
+  authorIsBot: false,
+  hasSpamLabel: false,
+  hasAdditionalInteraction: true,
   kind,
+  ...(kind === "pr" ? { targetBranch: "main" } : {}),
   createdAt: at(created),
   events,
   closedAt: closed === null ? null : at(closed),
@@ -77,7 +82,7 @@ test("duration summaries use interpolated quartiles and histograms conserve all 
   assert.throws(() => summarizeDistribution([NaN]), /finite/);
 });
 
-test("time-to-close selects the latest closure per item inside the interval, including merged PRs and reopened items", () => {
+test("time-to-close uses only the latest status change, excluding reopened items and superseded closures", () => {
   const data = history([
     item(1, "issue", -5, [
       event("ClosedEvent", 1),
@@ -89,28 +94,37 @@ test("time-to-close selects the latest closure per item inside the interval, inc
     item(3, "pr", 0, [event("MergedEvent", 3), event("ClosedEvent", 3)], 3),
     item(4, "pr", 2, [], 4),
     item(5, "issue", 0, [event("ClosedEvent", 8)], 8),
+    item(6, "issue", 0, [event("ClosedEvent", 2), event("ReopenedEvent", 3), event("ClosedEvent", 7)], 7),
+    item(7, "pr", 0, [event("ClosedEvent", 1), event("ReopenedEvent", 2), event("MergedEvent", 6)], 6),
+    item(8, "pr", 0, [event("ClosedEvent", 1), event("ReopenedEvent", 2)]),
   ]);
   const stats = select(data, 1, 4);
-  assert.equal(stats.issues.count, 2);
+  assert.equal(stats.issues.count, 1);
   assert.equal(stats.issues.min, 2);
-  assert.equal(stats.issues.max, 9);
-  assert.equal(stats.issues.average, 5.5);
+  assert.equal(stats.issues.max, 2);
+  assert.equal(stats.issues.average, 2);
   assert.equal(
     stats.prs.count,
     2,
     "merge and close notifications count once, missing final event is supplemented",
   );
   assert.equal(stats.prs.average, 2.5);
-  assert.deepEqual(stats.rankings.issue.longest.map((entry) => entry.number), [1, 2]);
+  assert.deepEqual(stats.rankings.issue.longest.map((entry) => entry.number), [2]);
   assert.deepEqual(stats.rankings.pr.shortest.map((entry) => entry.number), [4, 3]);
-  assert.equal(stats.rankings.issue.longest[0].duration, 9);
-  assert.equal(stats.rankings.issue.longest[0].at, base + 4 * day);
-  assert.equal(select(data, 1, 1).rankings.issue.longest[0].duration, 6);
+  assert.equal(stats.rankings.issue.longest[0].duration, 2);
+  assert.equal(stats.rankings.issue.longest[0].at, base + 3 * day);
+  assert.deepEqual(select(data, 1, 1).rankings.issue.longest, []);
+  assert.deepEqual(select(data, 2, 2).rankings.issue.longest, [], "a later closure replaces earlier closures even outside the selection");
+  assert.equal(select(data, 7, 7).issues.average, 7);
+  assert.equal(select(data, 6, 6).prs.average, 6);
+  assert.equal(select(data, 1, 1).prs.count, 0);
+  assert.ok(data.analytics.closures.every((closure) => closure.number !== 8));
+  assert.equal(stats.flow.closed, 4, "historical activity retains every real closure");
   assert.deepEqual(select(data, 2.1, 2.9).rankings.issue.longest, []);
   assert.equal(
     select(data, 1, 1).issues.average,
-    6,
-    "earlier selection uses its own latest closure",
+    null,
+    "a reopened item cannot contribute an earlier closure",
   );
   assert.equal(select(data, 2.1, 2.9).issues.count, 0);
   assert.equal(
@@ -118,6 +132,37 @@ test("time-to-close selects the latest closure per item inside the interval, inc
     8,
     "closure boundaries are inclusive",
   );
+});
+
+test("bot-authored and spam-labelled items are excluded from all ages but retained in volume and flow", () => {
+  const items = ["issue", "pr"].flatMap((kind, i) => {
+    const n = i * 10;
+    return [
+      item(n + 1, kind, 0, [event("ClosedEvent", 3)], 3),
+      { ...item(n + 2, kind, 0, [event("ClosedEvent", 4)], 4), authorIsBot: true },
+      { ...item(n + 3, kind, 0, [event("ClosedEvent", 5)], 5), hasSpamLabel: true },
+      item(n + 4, kind, 2),
+      { ...item(n + 5, kind, 0), authorIsBot: true },
+      { ...item(n + 6, kind, 0), hasSpamLabel: true },
+    ];
+  });
+  const data = history(items);
+  const stats = select(data, 0, 10);
+  assert.deepEqual(data.analytics.openIssueAges, [8]);
+  assert.deepEqual(data.analytics.openPRAges, [8]);
+  assert.equal(data.items, 12);
+  assert.equal(data.rows.at(-1).openIssues, 3);
+  assert.equal(data.rows.at(-1).openPRs, 3);
+  for (const [kind, offset] of [["issue", 0], ["pr", 10]]) {
+    const summary = stats[kind === "issue" ? "issues" : "prs"];
+    assert.equal(summary.count, 1);
+    assert.equal(summary.average, 3);
+    assert.deepEqual(stats.rankings[kind].shortest.map((entry) => entry.number), [offset + 1]);
+    assert.deepEqual(stats.rankings[kind].longest.map((entry) => entry.number), [offset + 1]);
+    const flow = kind === "issue" ? stats.flow : stats.prFlow;
+    assert.equal(flow.created, 6);
+    assert.equal(flow.closed, 3);
+  }
 });
 
 test("closure rankings cap each list at ten and sort zero durations and ties deterministically", () => {
@@ -140,6 +185,34 @@ test("closure rankings cap each list at ten and sort zero durations and ties det
     assert.deepEqual(select(data, null).rankings[kind], { shortest: [], longest: [] });
   }
   assert.deepEqual(data.analytics, original, "ranking must not reorder the shared event history");
+});
+
+test("all four rankings exclude unengaged items before taking ten without filtering other statistics", () => {
+  const items = [];
+  for (const [kind, offset] of [["issue", 0], ["pr", 100]]) {
+    for (let i = 0; i < 24; i++) items.push({
+      ...item(offset + i, kind, 0, [event("ClosedEvent", i / 3)]),
+      author: i === 1 ? null : "original-author",
+      hasAdditionalInteraction: i % 2 === 1,
+    });
+  }
+  const data = history(items);
+  const stats = select(data, 0, 10);
+  assert.equal(stats.issues.count, 24);
+  assert.equal(stats.prs.count, 24);
+  assert.equal(stats.flow.closed, 24);
+  assert.equal(data.items, 48);
+  for (const [kind, offset] of [["issue", 0], ["pr", 100]]) {
+    assert.deepEqual(stats.rankings[kind].shortest.map((entry) => entry.number),
+      Array.from({ length: 10 }, (_, i) => offset + i * 2 + 1));
+    assert.deepEqual(stats.rankings[kind].longest.map((entry) => entry.number),
+      Array.from({ length: 10 }, (_, i) => offset + 23 - i * 2));
+    assert.equal(stats.rankings[kind].longest[0].author, "original-author");
+    assert.equal(stats.rankings[kind].shortest[0].author, null);
+    const unengagedOnly = select(data, 0, 0);
+    assert.deepEqual(unengagedOnly.rankings[kind], { shortest: [], longest: [] });
+    assert.equal(unengagedOnly[kind === "issue" ? "issues" : "prs"].count, 1);
+  }
 });
 
 test("log histograms use equal logarithmic widths and start at the smallest positive observation", () => {
@@ -312,4 +385,56 @@ test("empty histories and closures after the selected snapshot do not manufactur
   );
   assert.equal(select(data, 0, 10).issues.count, 0);
   assert.deepEqual(data.analytics.openIssueAges, []);
+});
+
+test("PR net change and turnaround count actual activity separately across all four spans", () => {
+  const data = history([
+    item(1, "pr", 0, [
+      event("ClosedEvent", 1),
+      event("ReopenedEvent", 3),
+      event("MergedEvent", 3.5),
+      event("ClosedEvent", 3.5),
+    ], 3.5),
+    { ...item(2, "pr", 3), isDraft: true, hasAdditionalInteraction: false },
+    item(3, "pr", 0, [], 3.5),
+    item(4, "issue", 3, [event("ClosedEvent", 3.5)], 3.5),
+    item(5, "pr", 4, [event("ClosedEvent", 11)], 11),
+  ]);
+  const stats = select(data, 3, 3.5);
+  assert.deepEqual(stats.prFlow, {
+    created: 1, reopened: 1, closed: 2, net: 0, days: 0.5,
+    perDay: 0, perWeek: 0, perMonth: 0,
+  });
+  assert.deepEqual(stats.turnaround, {
+    issues: {
+      opened: { total: 1, perDay: 2, perWeek: 14, perMonth: 60 },
+      closed: { total: 1, perDay: 2, perWeek: 14, perMonth: 60 },
+    },
+    prs: {
+      opened: { total: 2, perDay: 4, perWeek: 28, perMonth: 120 },
+      closed: { total: 2, perDay: 4, perWeek: 28, perMonth: 120 },
+    },
+  });
+  const falling = select(data, 3.1, 3.6);
+  assert.equal(falling.prFlow.net, -2);
+  assert.equal(falling.prFlow.perDay, -4);
+  assert.equal(falling.prFlow.perWeek, -28);
+  assert.equal(falling.prFlow.perMonth, -120);
+  assert.equal(falling.turnaround.prs.opened.total, 0);
+  assert.equal(falling.turnaround.prs.closed.total, 2);
+  const instant = select(data, 3, 3);
+  assert.equal(instant.prFlow.net, 2);
+  assert.equal(instant.turnaround.prs.opened.total, 2);
+  assert.equal(instant.turnaround.prs.opened.perDay, null);
+  assert.equal(instant.turnaround.issues.closed.perMonth, null);
+  assert.equal(select(data, null).prFlow.perWeek, null);
+  assert.equal(select(data, null).turnaround.prs.closed.perDay, null);
+  const quiet = select(data, 5, 6);
+  assert.equal(quiet.prFlow.perDay, 0);
+  assert.equal(quiet.turnaround.prs.opened.perMonth, 0);
+  assert.equal(quiet.turnaround.prs.closed.perMonth, 0);
+  const full = select(data, 0, 10);
+  assert.equal(full.prFlow.net, data.rows.at(-1).openPRs);
+  assert.equal(full.prFlow.closed, 3, "reclosures count, duplicate merges and future events do not");
+  assert.equal(full.turnaround.prs.opened.perDay, 0.5, "inactive days contribute to the denominator");
 });

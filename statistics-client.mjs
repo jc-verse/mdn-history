@@ -15,9 +15,9 @@ export function mountStatistics(history, summarize, select, react) {
     if (!entries.length) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
-      cell.colSpan = 5;
+      cell.colSpan = 6;
       cell.className = "ranking-empty";
-      cell.textContent = `No ${kind === "issue" ? "issues" : "PRs"} closed in this period.`;
+      cell.textContent = `No ${kind === "issue" ? "issues" : "PRs"} with additional interaction closed in this period.`;
       row.append(cell);
       body.append(row);
       return;
@@ -46,6 +46,9 @@ export function mountStatistics(history, summarize, select, react) {
         cell.append(time);
         row.append(cell);
       }
+      const author = document.createElement("td");
+      author.textContent = entry.author === null ? "Unknown / deleted" : `@${entry.author}`;
+      row.append(author);
       body.append(row);
     }
   };
@@ -172,22 +175,32 @@ export function mountStatistics(history, summarize, select, react) {
       "#b64b25",
       "No PRs closed in this period",
     );
-    const { flow } = stats;
     const signed = (value) =>
       value === null
         ? "—"
         : `${value > 0 ? "+" : value < 0 ? "−" : ""}${number(Math.abs(value))}`;
-    for (const [id, value] of [
-      ["total", flow.net],
-      ["day", flow.perDay],
-      ["week", flow.perWeek],
-      ["month", flow.perMonth],
-    ])
-      document.querySelector(`#flow-${id}`).textContent = range
-        ? signed(value)
-        : "—";
-    document.querySelector("#flow-detail").textContent = !range
-      ? "This selection is outside the collected history."
-      : `${flow.created.toLocaleString("en-US")} created + ${flow.reopened.toLocaleString("en-US")} reopened − ${flow.closed.toLocaleString("en-US")} closures over ${number(flow.days)} days.${flow.days === 0 ? " Average rates require a nonzero interval." : ""}`;
+    for (const [kind, prefix, flow] of [
+      ["issues", "flow", stats.flow],
+      ["prs", "pr-flow", stats.prFlow],
+    ]) {
+      for (const [id, key] of [
+        ["total", "total"],
+        ["day", "perDay"],
+        ["week", "perWeek"],
+        ["month", "perMonth"],
+      ]) {
+        document.querySelector(`#${prefix}-${id}`).textContent = range
+          ? signed(key === "total" ? flow.net : flow[key])
+          : "—";
+        for (const direction of ["opened", "closed"]) {
+          const value = stats.turnaround[kind][direction][key];
+          document.querySelector(`#turnaround-${kind}-${direction}-${id}`).textContent =
+            range && value !== null ? number(value) : "—";
+        }
+      }
+      document.querySelector(`#${prefix}-detail`).textContent = !range
+        ? "This selection is outside the collected history."
+        : `${flow.created.toLocaleString("en-US")} created + ${flow.reopened.toLocaleString("en-US")} reopened − ${flow.closed.toLocaleString("en-US")} closures over ${number(flow.days)} days.${flow.days === 0 ? " Average rates require a nonzero interval." : ""}`;
+    }
   };
 }

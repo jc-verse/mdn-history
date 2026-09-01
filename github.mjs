@@ -1,7 +1,12 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { validateItemTitle } from "./history.mjs";
+import {
+  hasItemMetadata,
+  includedItem,
+  validateItemMetadata,
+  validateItemTitle,
+} from "./history.mjs";
 
 export const REPOSITORY = "mdn/content";
 const ENDPOINT = "https://api.github.com/graphql";
@@ -84,12 +89,156 @@ export function createClient(token, fetcher = fetch) {
   };
 }
 
-function timelineFields(kind) {
+function timelineFields(kind, pageSize = 10) {
   const merged = kind === "pullRequests";
-  return `timelineItems(first:10, after:$eventCursor, itemTypes:[CLOSED_EVENT,REOPENED_EVENT${merged ? ",MERGED_EVENT" : ""}]) {
+  return `timelineItems(first:${pageSize}, after:$eventCursor, itemTypes:[CLOSED_EVENT,REOPENED_EVENT${merged ? ",MERGED_EVENT" : ""}]) {
     pageInfo { hasNextPage endCursor }
-    nodes { __typename ... on ClosedEvent { createdAt } ... on ReopenedEvent { createdAt } ${merged ? "... on MergedEvent { createdAt }" : ""} }
+    nodes {
+      __typename
+      ... on ClosedEvent { createdAt }
+      ... on ReopenedEvent { createdAt }
+      ${merged ? "... on MergedEvent { createdAt }" : ""}
+    }
   }`;
+}
+
+function interactionFields(kind) {
+  const pr = kind === "pullRequests";
+  return `interactionItems: timelineItems(first:5, after:$interactionCursor, itemTypes:[ISSUE_COMMENT${pr ? ",PULL_REQUEST_REVIEW,PULL_REQUEST_REVIEW_THREAD" : ",CROSS_REFERENCED_EVENT,CONNECTED_EVENT"}]) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      __typename
+      ... on IssueComment { author { __typename login } }
+      ${pr ? `
+      ... on PullRequestReview { author { __typename login } state }
+      ... on PullRequestReviewThread { id ${reviewCommentsFields()} }
+      ` : `
+      ... on CrossReferencedEvent { source { __typename ... on PullRequest { baseRefName } } }
+      ... on ConnectedEvent { subject { __typename ... on PullRequest { baseRefName } } }
+      `}
+    }
+  }`;
+}
+
+function reviewCommentsFields(after = "") {
+  return `comments(first:5${after}) {
+    pageInfo { hasNextPage endCursor }
+    nodes { author { __typename login } state }
+  }`;
+}
+
+function labelFields(after = "") {
+  return `labels(first:5${after}) {
+    pageInfo { hasNextPage endCursor }
+    nodes { name }
+  }`;
+}
+
+async function hasSpamLabel(client, item, kind) {
+  let labels = item.labels;
+  const cursors = new Set();
+  while (true) {
+    if (!labels?.pageInfo || !Array.isArray(labels.nodes) ||
+        labels.nodes.some((label) => typeof label?.name !== "string"))
+      throw new Error("GitHub returned missing label metadata.");
+    if (labels.nodes.some((label) => label.name.toLowerCase() === "spam")) return true;
+    if (!labels.pageInfo.hasNextPage) return false;
+    const cursor = labels.pageInfo.endCursor;
+    if (!cursor || cursors.has(cursor)) throw new Error("GitHub returned a missing or repeated label cursor.");
+    cursors.add(cursor);
+    const type = kind === "issues" ? "Issue" : "PullRequest";
+    const data = await client(
+      `query($id:ID!, $labelCursor:String) { node(id:$id) { ... on ${type} { ${labelFields(", after:$labelCursor")} } } }`,
+      { id: item.id, labelCursor: cursor },
+    );
+    labels = data.node?.labels;
+  }
+}
+
+async function hasInteraction(client, item, kind, events) {
+  if (
+    kind === "pullRequests" &&
+    (item.state === "MERGED" ||
+      events.some((event) => event.__typename === "MergedEvent"))
+  )
+    return true;
+  if (
+    kind === "issues" &&
+    (item.hasLinkedMainPR || item.closedByPullRequestsReferences?.nodes?.some((pr) => pr?.baseRefName === "main") ||
+      events.some((event) =>
+        (event.__typename === "CrossReferencedEvent" &&
+          event.source?.__typename === "PullRequest" && event.source.baseRefName === "main") ||
+        (event.__typename === "ConnectedEvent" &&
+          event.subject?.__typename === "PullRequest" && event.subject.baseRefName === "main"),
+      ))
+  )
+    return true;
+  // Missing/deleted identities cannot prove that two commenters differ.
+  const author = item.author?.login?.toLowerCase();
+  const otherAuthor = (comment) => {
+    const login = comment?.author?.login?.toLowerCase();
+    return !!author && !!login && login !== author &&
+      comment.author.__typename !== "Bot";
+  };
+  if (events.some((event) =>
+    (event.__typename === "IssueComment" ||
+      (event.__typename === "PullRequestReview" && event.state !== "PENDING")) &&
+    otherAuthor(event),
+  ))
+    return true;
+  if (!author) return false;
+  const threads = events.filter((event) => event.__typename === "PullRequestReviewThread");
+  const submittedByOther = (comment) =>
+    comment?.state === "SUBMITTED" && otherAuthor(comment);
+  // Inspect every already-fetched thread before requesting any more replies.
+  if (threads.some((thread) => thread.comments?.nodes?.some(submittedByOther)))
+    return true;
+  for (const thread of threads) {
+    let comments = thread.comments;
+    const cursors = new Set();
+    while (true) {
+      if (!comments?.pageInfo || !Array.isArray(comments.nodes))
+        throw new Error("GitHub returned missing review comments.");
+      if (comments.nodes.some(submittedByOther))
+        return true;
+      if (!comments.pageInfo.hasNextPage) break;
+      const cursor = comments.pageInfo.endCursor;
+      if (!cursor || cursors.has(cursor))
+        throw new Error("GitHub returned a missing or repeated review comment cursor.");
+      cursors.add(cursor);
+      const data = await client(
+        `query($id:ID!, $commentCursor:String) { node(id:$id) { ... on PullRequestReviewThread { ${reviewCommentsFields(", after:$commentCursor")} } } }`,
+        { id: thread.id, commentCursor: cursor },
+      );
+      comments = data.node?.comments;
+    }
+  }
+  return false;
+}
+
+async function completeInteraction(client, item, kind, events) {
+  // Lifecycle pagination is independent: finding a comment never truncates
+  // closure history, and later lifecycle pages never fetch more comments.
+  if (await hasInteraction(client, item, kind, events)) return true;
+  if (kind === "pullRequests" && !item.author?.login) return false;
+  let evidence = item.interactionItems;
+  const cursors = new Set();
+  while (true) {
+    if (!evidence?.pageInfo || !Array.isArray(evidence.nodes))
+      throw new Error("GitHub returned missing interaction evidence.");
+    if (await hasInteraction(client, item, kind, evidence.nodes)) return true;
+    if (!evidence.pageInfo.hasNextPage) return false;
+    const cursor = evidence.pageInfo.endCursor;
+    if (!cursor || cursors.has(cursor))
+      throw new Error("GitHub returned a missing or repeated interaction cursor.");
+    cursors.add(cursor);
+    const type = kind === "issues" ? "Issue" : "PullRequest";
+    const data = await client(
+      `query($id:ID!, $interactionCursor:String) { node(id:$id) { ... on ${type} { ${interactionFields(kind)} } } }`,
+      { id: item.id, interactionCursor: cursor },
+    );
+    evidence = data.node?.interactionItems;
+  }
 }
 
 export function pageQuery(kind, incremental = false) {
@@ -98,9 +247,9 @@ export function pageQuery(kind, incremental = false) {
   return `query($cursor:String) {
     repository(owner:"mdn", name:"content") {
       createdAt
-      ${kind}(first:100, after:$cursor, orderBy:{field:${incremental ? "UPDATED_AT,direction:DESC" : "CREATED_AT,direction:ASC"}}) {
+      ${kind}(first:100, ${kind === "pullRequests" && !incremental ? 'baseRefName:"main", ' : ""}after:$cursor, orderBy:{field:${incremental ? "UPDATED_AT,direction:DESC" : "CREATED_AT,direction:ASC"}}) {
         totalCount pageInfo { hasNextPage endCursor }
-        nodes { id number updatedAt }
+        nodes { id number updatedAt state ${kind === "pullRequests" ? "baseRefName" : ""} }
       }
     }
     rateLimit { remaining resetAt }
@@ -108,14 +257,18 @@ export function pageQuery(kind, incremental = false) {
 }
 
 export async function completeTimeline(client, item, kind) {
+  if (kind === "pullRequests" && !includedItem({ ...item, kind: "pr", targetBranch: item.baseRefName }))
+    return null;
   validateItemTitle(item);
+  if (item.author && typeof item.author.__typename !== "string")
+    throw new Error("GitHub returned missing author account type.");
   let timeline = item.timelineItems;
   const events = [...timeline.nodes];
   while (timeline.pageInfo.hasNextPage) {
     const cursor = timeline.pageInfo.endCursor;
     const type = kind === "issues" ? "Issue" : "PullRequest";
     const data = await client(
-      `query($id:ID!, $eventCursor:String) { node(id:$id) { ... on ${type} { ${timelineFields(kind)} } } }`,
+      `query($id:ID!, $eventCursor:String) { node(id:$id) { ... on ${type} { ${timelineFields(kind, 100)} } } }`,
       { id: item.id, eventCursor: cursor },
     );
     if (!data.node)
@@ -130,15 +283,21 @@ export async function completeTimeline(client, item, kind) {
   return {
     number: item.number,
     title: item.title,
+    author: item.author?.login ?? null,
+    authorIsBot: item.author?.__typename === "Bot",
+    hasSpamLabel: await hasSpamLabel(client, item, kind),
+    hasAdditionalInteraction: await completeInteraction(client, item, kind, events),
     updatedAt: item.updatedAt,
     kind: kind === "issues" ? "issue" : "pr",
+    ...(kind === "pullRequests" ? { targetBranch: item.baseRefName } : {}),
     createdAt: item.createdAt,
     closedAt: item.closedAt,
     state: item.state,
-    events: events.map((event) => ({
-      type: event.__typename,
-      at: event.createdAt,
-    })),
+    events: events
+      .filter((event) =>
+        ["ClosedEvent", "ReopenedEvent", "MergedEvent"].includes(event.__typename),
+      )
+      .map((event) => ({ type: event.__typename, at: event.createdAt })),
   };
 }
 
@@ -155,17 +314,83 @@ async function fetchDetails(client, nodes, kind) {
   if (!nodes.length) return [];
   const type = kind === "issues" ? "Issue" : "PullRequest";
   const details = await client(
-    `query($ids:[ID!]!, $eventCursor:String) { nodes(ids:$ids) { ... on ${type} { id number title createdAt updatedAt closedAt state ${timelineFields(kind)} } } }`,
+    `query($ids:[ID!]!, $eventCursor:String) { nodes(ids:$ids) { ... on ${type} { id number title author { __typename login } ${labelFields()} createdAt updatedAt closedAt state ${kind === "issues" ? linkedPRFields() : "baseRefName"} ${timelineFields(kind)} } } }`,
     { ids: nodes.map((item) => item.id), eventCursor: null },
   );
+  validateNodes(details.nodes, nodes);
+  if (kind === "issues")
+    for (const item of details.nodes)
+      item.hasLinkedMainPR = await linkedMainPR(client, item);
+  // Check cheap, conclusive evidence before requesting any comments/reviews.
+  // Batch five evidence candidates for records that still need a proof.
+  const pending = details.nodes.filter((item) =>
+    kind === "issues"
+      ? !item.hasLinkedMainPR
+      : item.baseRefName === "main" && item.state !== "MERGED" && !!item.author?.login,
+  );
+  if (pending.length) {
+    const evidence = await client(
+      `query($ids:[ID!]!, $interactionCursor:String) { nodes(ids:$ids) { ... on ${type} { id ${interactionFields(kind)} } } }`,
+      { ids: pending.map((item) => item.id), interactionCursor: null },
+    );
+    validateNodes(evidence.nodes, pending);
+    for (let i = 0; i < pending.length; i++)
+      pending[i].interactionItems = evidence.nodes[i].interactionItems;
+  }
+  return details.nodes;
+}
+
+function linkedPRFields(after = "") {
+  return `closedByPullRequestsReferences(first:5, includeClosedPrs:true${after}) {
+    pageInfo { hasNextPage endCursor }
+    nodes { baseRefName }
+  }`;
+}
+
+async function linkedMainPR(client, item) {
+  let links = item.closedByPullRequestsReferences;
+  const cursors = new Set();
+  while (true) {
+    if (!links?.pageInfo || !Array.isArray(links.nodes))
+      throw new Error("GitHub returned missing linked PR information.");
+    if (links.nodes.some((pr) => pr?.baseRefName === "main")) return true;
+    if (!links.pageInfo.hasNextPage) return false;
+    const cursor = links.pageInfo.endCursor;
+    if (!cursor || cursors.has(cursor))
+      throw new Error("GitHub returned a missing or repeated linked PR cursor.");
+    cursors.add(cursor);
+    const data = await client(
+      `query($id:ID!, $linkCursor:String) { node(id:$id) { ... on Issue { ${linkedPRFields(", after:$linkCursor")} } } }`,
+      { id: item.id, linkCursor: cursor },
+    );
+    links = data.node?.closedByPullRequestsReferences;
+  }
+}
+
+function validateNodes(actual, expected) {
   if (
-    details.nodes.length !== nodes.length ||
-    details.nodes.some((item, i) => !item || item.id !== nodes[i].id)
+    !Array.isArray(actual) || actual.length !== expected.length ||
+    actual.some((item, i) => !item || item.id !== expected[i].id)
   )
     throw new Error(
       "GitHub returned missing or mismatched timeline items. Rerun with --fresh.",
     );
-  return details.nodes;
+}
+
+async function completeItems(client, nodes, kind) {
+  const items = new Array(nodes.length);
+  let next = 0;
+  const results = await Promise.allSettled(
+    Array.from({ length: Math.min(8, nodes.length) }, async () => {
+      while (next < nodes.length) {
+        const index = next++;
+        items[index] = await completeTimeline(client, nodes[index], kind);
+      }
+    }),
+  );
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) throw failure.reason;
+  return items.filter(Boolean);
 }
 
 export async function collect(options) {
@@ -176,20 +401,23 @@ export async function collect(options) {
   const manifest = fs.existsSync(manifestPath) ? readJSON(manifestPath) : null;
   // Preserve legacy page caches before a refresh or full rebuild starts.
   if (!fs.existsSync(snapshotPath) && manifest?.complete)
-    writeJSON(snapshotPath, readFullSnapshot(directory));
+    writeJSON(snapshotPath, readFullSnapshot(directory, { allowMissingTargetBranch: true }));
   let snapshot;
   if (
     !fresh &&
     manifest?.complete !== false &&
     (fs.existsSync(snapshotPath) || manifest?.complete)
   ) {
-    snapshot = await refreshSnapshot(options, readSnapshot(directory));
+    snapshot = await refreshSnapshot(options, readSnapshot(directory, { allowMissingTargetBranch: true }));
   } else {
     snapshot = await collectFull(options);
   }
   // One atomic replacement publishes the entire snapshot. Failed full and
   // incremental runs leave the previous completed snapshot available offline.
-  for (const item of snapshot.items) validateItemTitle(item);
+  for (const item of snapshot.items) {
+    validateItemTitle(item);
+    validateItemMetadata(item);
+  }
   writeJSON(snapshotPath, snapshot);
   fs.rmSync(path.join(directory, "refresh.json"), { force: true });
   return snapshot;
@@ -218,13 +446,18 @@ async function refreshSnapshot(
   // timestamp precision and updates made while the previous fetch was running.
   const since = Date.parse(previous.asOf) - 5 * 60 * 1000;
   const cached = new Map(previous.items.map((item) => [item.number, item]));
+  // Older snapshots need a full listing, even for items outside the update window.
+  const backfill = previous.items.some((item) => !hasItemMetadata(item));
   const refreshed = new Map(
     checkpoint.items.map((item) => [item.number, item]),
   );
+  const removed = new Set(checkpoint.removedNumbers || []);
   const streams = {};
   log(
     `Refreshing GitHub history updated since ${new Date(since).toISOString()}.`,
   );
+  if (backfill)
+    log("Backfilling missing metadata for older cached items.");
   const results = await Promise.allSettled(
     ["issues", "pullRequests"].map(async (kind) => {
       let cursor = null;
@@ -249,16 +482,38 @@ async function refreshSnapshot(
         const recent = page.nodes.filter(
           (item) => Date.parse(item.updatedAt) >= since,
         );
-        const changed = recent.filter((item) => {
+        const changed = [];
+        for (const item of (backfill ? page.nodes : recent)) {
           const saved = refreshed.get(item.number) || cached.get(item.number);
-          return !saved || saved.updatedAt !== item.updatedAt;
-        });
+          if (kind === "pullRequests") {
+            if (!includedItem({ kind: "pr", number: item.number, targetBranch: item.baseRefName })) {
+              removed.add(item.number);
+              refreshed.delete(item.number);
+              continue;
+            }
+            removed.delete(item.number);
+            // A new scalar field does not require downloading unchanged history.
+            const upgraded = saved && { ...saved, targetBranch: item.baseRefName };
+            if (upgraded && hasItemMetadata(upgraded) && saved.updatedAt === item.updatedAt) {
+              if (saved.targetBranch !== item.baseRefName) refreshed.set(item.number, upgraded);
+              continue;
+            }
+          }
+          if (!saved || !hasItemMetadata(saved) || saved.updatedAt !== item.updatedAt)
+            changed.push(item);
+        }
         const details = await fetchDetails(client, changed, kind);
-        const items = [];
-        for (const item of details)
-          items.push(await completeTimeline(client, item, kind));
-        for (const item of items) refreshed.set(item.number, item);
+        if (kind === "pullRequests")
+          for (const item of details)
+            if (item.baseRefName !== "main") removed.add(item.number);
+        const items = await completeItems(client, details, kind);
+        for (const item of items) {
+          removed.delete(item.number);
+          refreshed.set(item.number, item);
+        }
+        for (const number of removed) refreshed.delete(number);
         checkpoint.items = [...refreshed.values()];
+        checkpoint.removedNumbers = [...removed];
         writeJSON(checkpointPath, checkpoint);
         count += items.length;
         pages++;
@@ -266,7 +521,10 @@ async function refreshSnapshot(
         log(
           `${kind}: ${count.toLocaleString()} timelines fetched (${data.rateLimit.remaining} API points left)`,
         );
-        if (recent.length < page.nodes.length || !page.pageInfo.hasNextPage)
+        if (
+          (!backfill && recent.length < page.nodes.length) ||
+          !page.pageInfo.hasNextPage
+        )
           break;
         const next = page.pageInfo.endCursor;
         if (!next || cursors.has(next))
@@ -279,15 +537,18 @@ async function refreshSnapshot(
   const failure = results.find((result) => result.status === "rejected");
   if (failure) throw failure.reason;
   for (const item of refreshed.values()) cached.set(item.number, item);
+  for (const number of removed) cached.delete(number);
+  const items = [...cached.values()].filter(includedItem);
+  for (const [stream, kind] of [["issues", "issue"], ["pullRequests", "pr"]])
+    streams[stream].total = items.filter((item) => item.kind === kind).length;
   return {
-    version: 2,
     repository: REPOSITORY,
     createdAt: previous.createdAt,
     asOf: checkpoint.asOf,
     fetchedAt: new Date().toISOString(),
     complete: true,
     streams,
-    items: [...cached.values()],
+    items,
   };
 }
 
@@ -312,7 +573,6 @@ async function collectFull({
     manifest.asOf.slice(0, 10) !== now.toISOString().slice(0, 10)
   ) {
     manifest = {
-      version: 1,
       repository: REPOSITORY,
       asOf: now.toISOString(),
       complete: false,
@@ -356,7 +616,9 @@ async function collectFull({
               throw new Error("GitHub returned an unavailable item.");
             data.repository[kind].nodes = await fetchDetails(
               client,
-              nodes,
+              kind === "pullRequests"
+                ? nodes.filter((item) => includedItem({ kind: "pr", number: item.number, targetBranch: item.baseRefName }))
+                : nodes,
               kind,
             );
             return { cursor, data };
@@ -373,15 +635,8 @@ async function collectFull({
             );
           manifest.createdAt = data.repository.createdAt;
           const page = data.repository[kind];
-          const items = [];
-          // Usually one event per item; only unusually active timelines need extra requests.
-          for (const item of page.nodes) {
-            if (!item)
-              throw new Error(
-                "GitHub returned an unavailable item. Rerun with --fresh.",
-              );
-            items.push(await completeTimeline(client, item, kind));
-          }
+          // Bound timeline pagination while keeping each saved page in item order.
+          const items = await completeItems(client, page.nodes, kind);
           if (
             page.pageInfo.hasNextPage &&
             (!page.pageInfo.endCursor ||
@@ -399,6 +654,7 @@ async function collectFull({
           stream.cursor = page.pageInfo.endCursor;
           stream.done = !page.pageInfo.hasNextPage;
           stream.total = page.totalCount;
+          if (stream.done) stream.total = stream.count;
           writeJSON(manifestPath, manifest);
           log(
             `${kind}: ${stream.count.toLocaleString()} / ${stream.total.toLocaleString()} (${data.rateLimit.remaining} API points left)`,
@@ -415,12 +671,11 @@ async function collectFull({
   return readFullSnapshot(directory);
 }
 
-function readFullSnapshot(directory) {
+function readFullSnapshot(directory, options) {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
   );
   if (
-    manifest.version !== 1 ||
     manifest.repository !== REPOSITORY ||
     !manifest.complete
   )
@@ -437,20 +692,18 @@ function readFullSnapshot(directory) {
         if (numbers.has(item.number))
           throw new Error(`Duplicate #${item.number}; rerun with --fresh.`);
         numbers.add(item.number);
-        validateItemTitle(item);
         items.push(item);
       }
     }
   }
-  return { ...manifest, items };
+  return scopeSnapshot({ ...manifest, items }, options);
 }
 
-export function readSnapshot(directory) {
+export function readSnapshot(directory, options) {
   const snapshotPath = path.join(directory, "snapshot.json");
-  if (!fs.existsSync(snapshotPath)) return readFullSnapshot(directory);
+  if (!fs.existsSync(snapshotPath)) return readFullSnapshot(directory, options);
   const snapshot = readJSON(snapshotPath);
   if (
-    ![1, 2].includes(snapshot.version) ||
     snapshot.repository !== REPOSITORY ||
     !snapshot.complete ||
     !Array.isArray(snapshot.items)
@@ -458,6 +711,13 @@ export function readSnapshot(directory) {
     throw new Error(
       "No complete snapshot. Run without --offline to finish downloading.",
     );
-  for (const item of snapshot.items) validateItemTitle(item);
-  return snapshot;
+  return scopeSnapshot(snapshot, options);
+}
+
+function scopeSnapshot(snapshot, { allowMissingTargetBranch = false } = {}) {
+  const items = snapshot.items.filter((item) =>
+    (allowMissingTargetBranch && item.kind === "pr" && !item.targetBranch) || includedItem(item),
+  );
+  for (const item of items) validateItemTitle(item);
+  return { ...snapshot, items };
 }

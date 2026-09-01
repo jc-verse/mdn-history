@@ -8,6 +8,35 @@ export function validateItemTitle(item) {
     );
 }
 
+export function hasItemMetadata(item) {
+  return (
+    (item.author === null ||
+      (typeof item.author === "string" && !!item.author.trim())) &&
+    typeof item.hasAdditionalInteraction === "boolean" &&
+    typeof item.authorIsBot === "boolean" &&
+    typeof item.hasSpamLabel === "boolean" &&
+    (item.kind !== "pr" || (typeof item.targetBranch === "string" && !!item.targetBranch))
+  );
+}
+
+export function validateItemMetadata(item) {
+  if (!hasItemMetadata(item))
+    throw new Error(
+      `Missing author, interaction, bot/spam, or target branch metadata for #${item.number}. Run without --offline to backfill; use --fresh if the item is no longer accessible.`,
+    );
+}
+
+export function includedItem(item) {
+  if (item.kind !== "pr") return true;
+  if (typeof item.targetBranch !== "string" || !item.targetBranch)
+    throw new Error(`Missing target branch for PR #${item.number}. Run without --offline to backfill.`);
+  return item.targetBranch === "main";
+}
+
+export function eligibleForAges(item) {
+  return !item.authorIsBot && !item.hasSpamLabel;
+}
+
 function timestamp(value) {
   const result = Date.parse(value);
   if (!Number.isFinite(result)) throw new Error(`Invalid timestamp: ${value}`);
@@ -68,9 +97,13 @@ export function weeklySamples(start, asOf) {
 }
 
 export function buildHistory(snapshot) {
-  for (const item of snapshot.items) validateItemTitle(item);
+  const items = snapshot.items.filter(includedItem);
+  for (const item of items) {
+    validateItemTitle(item);
+    validateItemMetadata(item);
+  }
   const asOf = timestamp(snapshot.asOf);
-  const relevant = snapshot.items.filter(
+  const relevant = items.filter(
     (item) => timestamp(item.createdAt) <= asOf,
   );
   const first = relevant.reduce(
@@ -82,6 +115,7 @@ export function buildHistory(snapshot) {
   const analytics = {
     closures: [],
     issueActivity: [],
+    prActivity: [],
     openIssueAges: [],
     openPRAges: [],
     ageAsOf: snapshot.fetchedAt || snapshot.asOf,
@@ -96,19 +130,29 @@ export function buildHistory(snapshot) {
         kind: item.kind,
         delta: transition.delta,
       });
-      if (item.kind === "issue") analytics.issueActivity.push(transition);
-      if (transition.type === "closed")
-        analytics.closures.push({
-          number: item.number,
-          title: item.title,
-          kind: item.kind,
-          created,
-          at: transition.at,
-        });
+      const activity = item.kind === "issue" ? analytics.issueActivity : analytics.prActivity;
+      activity.push(transition);
     }
+    // Only the final status transition contributes a closure-duration sample.
+    // All transitions above remain available for historical counts and flow.
+    const latest = transitions.at(-1);
+    if (latest.type === "closed" && eligibleForAges(item))
+      analytics.closures.push({
+        number: item.number,
+        title: item.title,
+        author: item.author,
+        authorIsBot: item.authorIsBot,
+        hasSpamLabel: item.hasSpamLabel,
+        hasAdditionalInteraction: item.hasAdditionalInteraction,
+        kind: item.kind,
+        ...(item.kind === "pr" ? { targetBranch: item.targetBranch } : {}),
+        created,
+        at: latest.at,
+      });
   }
   const ageAt = timestamp(analytics.ageAsOf);
-  for (const item of snapshot.items) {
+  for (const item of items) {
+    if (!eligibleForAges(item)) continue;
     if (timestamp(item.createdAt) > ageAt) continue;
     const { created, open } = lifecycle(item, ageAt);
     if (open) {
@@ -119,6 +163,7 @@ export function buildHistory(snapshot) {
   }
   analytics.closures.sort((a, b) => a.at - b.at);
   analytics.issueActivity.sort((a, b) => a.at - b.at);
+  analytics.prActivity.sort((a, b) => a.at - b.at);
   changes.sort((a, b) => a.at - b.at);
   const counts = { issue: 0, pr: 0 };
   const startAt = `${samples[0].date}T00:00:00.000Z`;
