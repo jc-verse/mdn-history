@@ -1,0 +1,107 @@
+name: Daily sync
+
+on:
+  schedule:
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mdn-history-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm test
+
+      - name: Restore history cache
+        id: history-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cache
+          key: history-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: history-v2-
+
+      - name: Bootstrap from the initial snapshot if needed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ ! -f cache/snapshot.json ] && [ ! -f cache/manifest.json ]; then
+            mkdir -p cache
+            if gh release download cache-seed --pattern snapshot.json --dir cache; then
+              echo 'Restored the initial history snapshot.'
+            else
+              rm -f cache/snapshot.json
+              echo 'No seed available; the collector will download the full history.'
+            fi
+          fi
+
+      - name: Refresh GitHub history and generate report
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GH_READ_TOKEN || github.token }}
+        run: node index.mjs
+
+      - name: Save history and resumable checkpoints
+        if: ${{ always() && steps.sync.outcome != 'skipped' && steps.sync.outcome != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cache
+          key: history-v2-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload generated report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mdn-history-report
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Configure Cloudflare deployment
+        if: ${{ vars.CLOUDFLARE_WORKER_NAME != '' }}
+        env:
+          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          : "${CLOUDFLARE_API_TOKEN:?Set the CLOUDFLARE_API_TOKEN Actions secret}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Set the CLOUDFLARE_ACCOUNT_ID Actions secret}"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const config = JSON.parse(fs.readFileSync('wrangler.json', 'utf8'));
+          config.name = process.env.CLOUDFLARE_WORKER_NAME;
+          fs.writeFileSync('wrangler.json', JSON.stringify(config, null, 2));
+          NODE
+
+      - name: Deploy report to Cloudflare Workers
+        if: ${{ vars.CLOUDFLARE_WORKER_NAME != '' }}
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: Report publication status
+        env:
+          WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+        run: |
+          if [ -n "$WORKER_NAME" ]; then
+            echo 'Updated GitHub history and deployed the report to Cloudflare.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Updated GitHub history. Download mdn-history-report from this run.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Cloudflare deployment is not configured; see the README for the required settings.' >> "$GITHUB_STEP_SUMMARY"
+          fi

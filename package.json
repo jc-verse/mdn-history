@@ -1,0 +1,20 @@
+{
+  "name": "mdn-history",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "plotly.js-dist-min": "3.1.0"
+  },
+  "description": "Daily mdn/content issue and pull request history with interactive static reports",
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jc-verse/mdn-history.git"
+  }
+}

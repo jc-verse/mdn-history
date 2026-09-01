@@ -1,0 +1,10 @@
+/node_modules/
+/cache/
+/output/
+/.wrangler/
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+.DS_Store
+*.log
