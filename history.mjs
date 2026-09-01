@@ -1,6 +1,13 @@
 const DAY = 86400000;
 const WEEK = 7 * DAY;
 
+export function validateItemTitle(item) {
+  if (typeof item.title !== "string" || !item.title.trim())
+    throw new Error(
+      `Missing title for #${item.number}. Every item must have a nonempty title.`,
+    );
+}
+
 function timestamp(value) {
   const result = Date.parse(value);
   if (!Number.isFinite(result)) throw new Error(`Invalid timestamp: ${value}`);
@@ -61,6 +68,7 @@ export function weeklySamples(start, asOf) {
 }
 
 export function buildHistory(snapshot) {
+  for (const item of snapshot.items) validateItemTitle(item);
   const asOf = timestamp(snapshot.asOf);
   const relevant = snapshot.items.filter(
     (item) => timestamp(item.createdAt) <= asOf,
@@ -92,6 +100,7 @@ export function buildHistory(snapshot) {
       if (transition.type === "closed")
         analytics.closures.push({
           number: item.number,
+          title: item.title,
           kind: item.kind,
           created,
           at: transition.at,

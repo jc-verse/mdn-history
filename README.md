@@ -50,6 +50,8 @@ Each run restores the previous history cache, collects changes, saves a new cach
 
 The `cache-seed` GitHub release contains an initial `snapshot.json` taken from the completed local collection. It is downloaded only when no Actions cache exists, avoiding an expensive initial fetch without committing generated data. If neither cache nor seed is available, the collector performs a full download. This seed contains public issue/PR history only, with no triage notes or tokens.
 
+Actions restores and saves caches under the `history-v3-titles-` prefix, excluding older caches without titles. Each run saves a new cache entry; subsequent runs restore the newest matching entry. The release seed must also contain titles for every item, but it does not need a daily upload.
+
 ### Cloudflare deployment
 
 Daily sync works without Cloudflare credentials and always saves its report as a downloadable Actions artifact. To also update your existing **Worker**, set these under **Settings → Secrets and variables → Actions**:
@@ -87,6 +89,10 @@ Four cards in a 2×2 grid show issue time-to-close, PR time-to-close, and the ag
 - **Net issue change** is creations plus reopenings minus closure transitions inside the selected interval. Every actual transition counts, even if the same issue closes more than once. Positive means backlog growth; negative means backlog reduction. Average rates divide this net change by the selected interval's elapsed days, including partial days, then multiply by 7 for a week and 30 for a normalized month. These are rates over the whole selection, not averages of only days with activity. Zero-duration selections show their net count but no average rate.
 
 These calculations use cached item timelines and require no additional GitHub requests. The JSON download includes the closure/activity data and saved open issue and PR ages used by the panels; the CSV remains the weekly backlog series.
+
+The **Top 10 longest & shortest times to close** section ranks issues and PRs separately in four lists. Each row shows the item number and title in a GitHub link that opens in a new tab, plus elapsed time, creation date, and closure date (hover for exact UTC timestamps). Lists follow the selected period and use the same latest-closure-per-item rule as the histograms, including merges, reopened items, and zero-duration closures. Each list shows up to 10 items; equal durations are ordered by ascending item number. Empty selections show an explicit empty state.
+
+Every cached item must have a nonempty title; collection and report generation throw an error when a title is missing. Titles reflect the latest collection rather than historical titles at closure.
 
 - The first sample is the earliest of repository creation and the creation dates of available issues/PRs. Some transferred issues retain creation dates before `mdn/content` existed, so the available history starts in April 2018, while the repository was created in September 2020.
 - The remaining samples are seven calendar days apart, anchored backward from today's **UTC** date. The first interval can be shorter than a week so the chart includes the very first day.

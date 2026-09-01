@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { validateItemTitle } from "./history.mjs";
 
 export const REPOSITORY = "mdn/content";
 const ENDPOINT = "https://api.github.com/graphql";
@@ -107,6 +108,7 @@ export function pageQuery(kind, incremental = false) {
 }
 
 export async function completeTimeline(client, item, kind) {
+  validateItemTitle(item);
   let timeline = item.timelineItems;
   const events = [...timeline.nodes];
   while (timeline.pageInfo.hasNextPage) {
@@ -127,6 +129,7 @@ export async function completeTimeline(client, item, kind) {
   }
   return {
     number: item.number,
+    title: item.title,
     updatedAt: item.updatedAt,
     kind: kind === "issues" ? "issue" : "pr",
     createdAt: item.createdAt,
@@ -152,7 +155,7 @@ async function fetchDetails(client, nodes, kind) {
   if (!nodes.length) return [];
   const type = kind === "issues" ? "Issue" : "PullRequest";
   const details = await client(
-    `query($ids:[ID!]!, $eventCursor:String) { nodes(ids:$ids) { ... on ${type} { id number createdAt updatedAt closedAt state ${timelineFields(kind)} } } }`,
+    `query($ids:[ID!]!, $eventCursor:String) { nodes(ids:$ids) { ... on ${type} { id number title createdAt updatedAt closedAt state ${timelineFields(kind)} } } }`,
     { ids: nodes.map((item) => item.id), eventCursor: null },
   );
   if (
@@ -186,6 +189,7 @@ export async function collect(options) {
   }
   // One atomic replacement publishes the entire snapshot. Failed full and
   // incremental runs leave the previous completed snapshot available offline.
+  for (const item of snapshot.items) validateItemTitle(item);
   writeJSON(snapshotPath, snapshot);
   fs.rmSync(path.join(directory, "refresh.json"), { force: true });
   return snapshot;
@@ -433,6 +437,7 @@ function readFullSnapshot(directory) {
         if (numbers.has(item.number))
           throw new Error(`Duplicate #${item.number}; rerun with --fresh.`);
         numbers.add(item.number);
+        validateItemTitle(item);
         items.push(item);
       }
     }
@@ -453,5 +458,6 @@ export function readSnapshot(directory) {
     throw new Error(
       "No complete snapshot. Run without --offline to finish downloading.",
     );
+  for (const item of snapshot.items) validateItemTitle(item);
   return snapshot;
 }

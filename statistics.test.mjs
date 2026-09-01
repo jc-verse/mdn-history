@@ -9,6 +9,7 @@ const at = (days) => new Date(base + days * day).toISOString();
 const event = (type, days) => ({ type, at: at(days) });
 const item = (number, kind, created, events = [], closed = null) => ({
   number,
+  title: `Item ${number}`,
   kind,
   createdAt: at(created),
   events,
@@ -100,6 +101,12 @@ test("time-to-close selects the latest closure per item inside the interval, inc
     "merge and close notifications count once, missing final event is supplemented",
   );
   assert.equal(stats.prs.average, 2.5);
+  assert.deepEqual(stats.rankings.issue.longest.map((entry) => entry.number), [1, 2]);
+  assert.deepEqual(stats.rankings.pr.shortest.map((entry) => entry.number), [4, 3]);
+  assert.equal(stats.rankings.issue.longest[0].duration, 9);
+  assert.equal(stats.rankings.issue.longest[0].at, base + 4 * day);
+  assert.equal(select(data, 1, 1).rankings.issue.longest[0].duration, 6);
+  assert.deepEqual(select(data, 2.1, 2.9).rankings.issue.longest, []);
   assert.equal(
     select(data, 1, 1).issues.average,
     6,
@@ -111,6 +118,28 @@ test("time-to-close selects the latest closure per item inside the interval, inc
     8,
     "closure boundaries are inclusive",
   );
+});
+
+test("closure rankings cap each list at ten and sort zero durations and ties deterministically", () => {
+  const items = [];
+  for (const kind of ["issue", "pr"])
+    for (let i = 12; i >= 0; i--)
+      items.push(item(i + (kind === "pr" ? 100 : 1), kind, 0,
+        [event(kind === "pr" ? "MergedEvent" : "ClosedEvent", Math.floor(i / 2))]));
+  const data = history(items);
+  const original = structuredClone(data.analytics);
+  const stats = select(data, 0, 10);
+  for (const [kind, offset] of [["issue", 1], ["pr", 100]]) {
+    const { shortest, longest } = stats.rankings[kind];
+    assert.deepEqual(shortest.map((entry) => entry.number),
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => i + offset));
+    assert.deepEqual(longest.map((entry) => entry.number),
+      [12, 10, 11, 8, 9, 6, 7, 4, 5, 2].map((i) => i + offset));
+    assert.equal(shortest[0].duration, 0);
+    assert.equal(longest[0].duration, 6);
+    assert.deepEqual(select(data, null).rankings[kind], { shortest: [], longest: [] });
+  }
+  assert.deepEqual(data.analytics, original, "ranking must not reorder the shared event history");
 });
 
 test("log histograms use equal logarithmic widths and start at the smallest positive observation", () => {

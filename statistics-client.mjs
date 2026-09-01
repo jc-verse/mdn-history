@@ -9,6 +9,46 @@ export function mountStatistics(history, summarize, select, react) {
     if (days < 1) return `${number(days * 24)} h`;
     return `${number(days)} d`;
   };
+  const ranking = (kind, order, entries) => {
+    const body = document.querySelector(`#ranking-${kind}-${order}`);
+    body.replaceChildren();
+    if (!entries.length) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 5;
+      cell.className = "ranking-empty";
+      cell.textContent = `No ${kind === "issue" ? "issues" : "PRs"} closed in this period.`;
+      row.append(cell);
+      body.append(row);
+      return;
+    }
+    for (const [index, entry] of entries.entries()) {
+      const row = document.createElement("tr");
+      const rank = document.createElement("td");
+      rank.textContent = String(index + 1);
+      const item = document.createElement("td");
+      const link = document.createElement("a");
+      link.href = `https://github.com/mdn/content/${kind === "issue" ? "issues" : "pull"}/${entry.number}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = `#${entry.number} · ${entry.title}`;
+      item.append(link);
+      const elapsed = document.createElement("td");
+      elapsed.textContent = duration(entry.duration);
+      elapsed.title = `${(entry.duration * 86400).toLocaleString("en-US", { maximumFractionDigits: 3 })} seconds`;
+      row.append(rank, item, elapsed);
+      for (const timestamp of [entry.created, entry.at]) {
+        const cell = document.createElement("td");
+        const time = document.createElement("time");
+        time.dateTime = new Date(timestamp).toISOString();
+        time.textContent = time.dateTime.slice(0, 10);
+        time.title = time.dateTime.replace("T", " ").replace(/\.\d+Z$/, " UTC");
+        cell.append(time);
+        row.append(cell);
+      }
+      body.append(row);
+    }
+  };
   const distribution = (id, summary, color, empty) => {
     document.querySelector(`#${id}-count`).textContent =
       summary.count.toLocaleString("en-US");
@@ -117,6 +157,9 @@ export function mountStatistics(history, summarize, select, react) {
   );
   return (range) => {
     const stats = select(history.analytics, range, summarize);
+    for (const kind of ["issue", "pr"])
+      for (const order of ["longest", "shortest"])
+        ranking(kind, order, stats.rankings[kind][order]);
     distribution(
       "duration-issues",
       stats.issues,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { weeklySamples } from "./history.mjs";
+import { validateItemTitle, weeklySamples } from "./history.mjs";
 import { findExtrema } from "./extrema.mjs";
 import { mountRangeSummary } from "./report-client.mjs";
 import { sampleRange } from "./sampling.mjs";
@@ -17,6 +17,7 @@ export function renderReport(history, directory) {
     throw new Error(
       "Item histories are required for statistics; regenerate from the snapshot.",
     );
+  for (const closure of history.analytics.closures) validateItemTitle(closure);
   fs.mkdirSync(directory, { recursive: true });
   const require = createRequire(import.meta.url);
   const plotly = fs.readFileSync(require.resolve("plotly.js-dist-min"), "utf8");
@@ -183,6 +184,21 @@ export function renderReport(history, directory) {
 </section>`,
     )
     .join("");
+  const rankingCards = [
+    ["issue", "Issues", "issues"],
+    ["pr", "PRs", "prs"],
+  ]
+    .flatMap(([kind, label, color]) =>
+      ["longest", "shortest"].map(
+        (order) => `<section class="ranking-card" aria-labelledby="ranking-${kind}-${order}-title">
+<h3 id="ranking-${kind}-${order}-title" class="${color}">${label} · ${order === "longest" ? "Longest" : "Shortest"} time to close</h3>
+<div class="ranking-scroll" tabindex="0" role="region" aria-labelledby="ranking-${kind}-${order}-title">
+<table class="ranking-table"><thead><tr><th scope="col">Rank</th><th scope="col">${kind === "issue" ? "Issue" : "PR"}</th><th scope="col">Time to close</th><th scope="col">Created (UTC)</th><th scope="col">Closed (UTC)</th></tr></thead>
+<tbody id="ranking-${kind}-${order}"></tbody></table>
+</div></section>`,
+      ),
+    )
+    .join("");
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>mdn/content · Open issues & pull requests</title>
@@ -191,6 +207,7 @@ export function renderReport(history, directory) {
 .range-summary{margin:28px 0 24px}.range-summary h2{font-size:20px;letter-spacing:-.025em;margin:0 0 6px}.range-period{font-size:13px;font-variant-numeric:tabular-nums;margin:0;color:#29374b}.range-help{max-width:1000px;font-size:12px;margin:8px 0 16px}.extrema-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.extrema-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 24px;min-width:0}.extrema-card h3{font-size:14px;margin:0 0 16px}.extrema-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.extrema-label{display:block;color:#617088;font-size:12px}.extrema-values strong{display:block;font-size:32px;letter-spacing:-.04em;margin:4px 0}.extrema-values time{display:block;font-size:11px;line-height:1.6;color:#617088;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}@media(max-width:700px){.extrema-grid{grid-template-columns:1fr}.extrema-card{padding:18px}}
 .custom-range{margin:0 0 18px;background:white;border:1px solid #e0e6ef;border-radius:12px;padding:14px 20px}.custom-range summary{cursor:pointer;font-size:14px;font-weight:600;color:#2165d6}.custom-range form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;margin-top:16px}.custom-range label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#617088}.custom-range input,.custom-range button{font:inherit;font-size:14px;border:1px solid #cbd5e1;border-radius:6px;padding:9px 12px;min-height:40px}.custom-range button{background:#2165d6;color:white;border-color:#2165d6;cursor:pointer}.custom-range :focus-visible{outline:2px solid #2165d6;outline-offset:3px}.custom-range .date-help{font-size:12px;margin:12px 0 0}.custom-range .date-error{font-size:13px;color:#a52626;margin:8px 0 0}.date-error:empty{display:none}
 .analytics-section{margin:28px 0}.analytics-section h2{font-size:20px;letter-spacing:-.025em;margin:0 0 8px}.analytics-help{font-size:12px;max-width:1100px;margin:0 0 16px}.distribution-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.distribution-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 16px 8px;min-width:0}.distribution-card h3{font-size:15px;margin:0 0 8px}.ages{color:#168273}.pr-ages{color:#7b57b5}.distribution-scope{font-size:11px;line-height:1.7;min-height:38px;margin:0 0 14px}.distribution-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 10px;margin:0}.distribution-values dt{font-size:11px;color:#617088}.distribution-values dd{font-size:19px;font-weight:600;margin:4px 0 0;font-variant-numeric:tabular-nums}.histogram{height:260px;width:100%}.distribution-scope:empty{display:none}.flow-values{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:16px 0}.flow-values div{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:18px}.flow-values dt{font-size:12px;color:#617088}.flow-values dd{font-size:28px;letter-spacing:-.03em;margin:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums}@media(max-width:700px){.distribution-grid{grid-template-columns:1fr}.distribution-card{padding:20px 24px 8px}.distribution-values{grid-template-columns:repeat(3,minmax(0,1fr))}.flow-values{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ranking-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.ranking-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 16px;min-width:0}.ranking-card h3{font-size:15px;margin:0 0 16px}.ranking-scroll{overflow-x:auto}.ranking-scroll:focus-visible{outline:2px solid #2165d6;outline-offset:3px}.ranking-table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.ranking-table th,.ranking-table td{padding:10px 8px;text-align:left;border-bottom:1px solid #edf0f4}.ranking-table th{font-size:11px;font-weight:600;color:#617088}.ranking-table td:nth-child(2){white-space:normal;min-width:160px;overflow-wrap:anywhere;line-height:1.5}.ranking-table td:first-child{color:#617088}.ranking-table td:nth-child(3){font-weight:600}.ranking-table tbody tr:last-child td{border-bottom:0}.ranking-table .ranking-empty{white-space:normal;padding:24px 8px;color:#617088}@media(max-width:1000px){.ranking-grid{grid-template-columns:1fr}}
 </style><script src="plotly.min.js"></script></head><body><main>
 <div class="eyebrow">MDN Web Docs / Repository history</div>
 <h1>Open issues & pull requests</h1>
@@ -233,6 +250,11 @@ export function renderReport(history, directory) {
 <p class="analytics-help">Close time runs from original creation to the latest closure within the selected period, one observation per item; PR merges count as closures. Items reopened later still contribute their closure. Open issue and PR ages run from creation to fetch time and stay fixed as you change the selection. Open draft PRs are included. Q1 and Q3 are the 25th and 75th percentiles, using linear interpolation. Time-to-close bins have equal widths in log space; age bins have equal widths in days. Axes start at the minimum plotted value. Zero-duration closures remain in the statistics and are noted separately from the log charts.</p>
 <div class="distribution-grid">${distributionCards}</div>
 </section>
+<section class="analytics-section" aria-labelledby="rankings-title">
+<h2 id="rankings-title">Top 10 longest & shortest times to close</h2>
+<p class="analytics-help">Issues and PRs closed in the selected period, ranked separately by elapsed time from creation to their latest closure in that period. PR merges count as closures. Each list shows up to 10 items, including zero-duration closures; ties use the lowest item number first. Hover over dates for exact UTC timestamps.</p>
+<div class="ranking-grid">${rankingCards}</div>
+</section>
 <div class="footer"><p>Reconstructed from creation, close, reopen, and merge events in GitHub’s public API. Issues exclude pull requests; draft PRs count as open. Weekly samples use end of day UTC; intraday samples use UTC hour boundaries and selection endpoints. The latest snapshot is ${history.asOf.replace("T", " ").replace(/\.\d+Z$/, " UTC")}. Weeks are anchored to that last date, with a shorter first interval if needed. Available items include transferred history; deleted or inaccessible items and historical repository membership cannot be reconstructed. ${history.fallbackClosures ? `Final closure timestamps supplement timeline timestamps for ${history.fallbackClosures} items. ` : ""}Hover for values; drag to zoom; click a legend label to toggle a series.</p><div class="downloads"><a href="history.csv" download>Weekly CSV</a> · <a href="history.json" download>JSON</a></div></div>
 <noscript><p>Enable JavaScript to view the interactive chart, or download the CSV above.</p></noscript>
 </main><script>
@@ -242,7 +264,7 @@ ${summarizeDistribution.toString()}
 ${selectedStatistics.toString()}
 ${mountStatistics.toString()}
 ${mountRangeSummary.toString()}
-const reportHistory = ${JSON.stringify(exactHistory)};
+const reportHistory = ${JSON.stringify(exactHistory).replace(/</g, "\\u003c")};
 const updateStatistics = mountStatistics(reportHistory,summarizeDistribution,selectedStatistics,Plotly.react);
 Plotly.newPlot("plot",${JSON.stringify(series)},${JSON.stringify(layout)},${JSON.stringify(config)})
   .then(plot => mountRangeSummary(plot,reportHistory,findExtrema,sampleRange,Plotly.restyle,Plotly.relayout,updateStatistics));

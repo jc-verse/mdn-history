@@ -8,6 +8,7 @@ const at = (day, time = "12:00:00") =>
 const ms = (day, time) => Date.parse(at(day, time));
 const item = (number, kind, createdAt, events = [], closedAt = null) => ({
   number,
+  title: `Item ${number}`,
   kind,
   createdAt,
   events,

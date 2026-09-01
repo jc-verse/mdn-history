@@ -91,14 +91,31 @@ export function selectedStatistics(analytics, range, summarize) {
     }
   }
   const durations = { issue: [], pr: [] };
-  for (const closure of latestClosures.values())
-    durations[closure.kind].push((closure.at - closure.created) / 86400000);
+  const ranked = { issue: [], pr: [] };
+  for (const closure of latestClosures.values()) {
+    const duration = (closure.at - closure.created) / 86400000;
+    durations[closure.kind].push(duration);
+    ranked[closure.kind].push({ ...closure, duration });
+  }
+  const rankings = {};
+  for (const kind of ["issue", "pr"]) {
+    // Break duration ties by item number in both directions for stable lists.
+    rankings[kind] = {
+      shortest: [...ranked[kind]]
+        .sort((a, b) => a.duration - b.duration || a.number - b.number)
+        .slice(0, 10),
+      longest: ranked[kind]
+        .sort((a, b) => b.duration - a.duration || a.number - b.number)
+        .slice(0, 10),
+    };
+  }
   const days = range ? (range.end - range.start) / 86400000 : 0;
   const net = created + reopened - closed;
   const perDay = days > 0 ? net / days : null;
   return {
     issues: summarize(durations.issue, { logarithmic: true }),
     prs: summarize(durations.pr, { logarithmic: true }),
+    rankings,
     flow: {
       created,
       reopened,

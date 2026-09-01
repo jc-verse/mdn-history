@@ -19,6 +19,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
     items: [
       {
         number: 1,
+        title: 'Fix </script><img src=x onerror=alert(1)> & "examples"',
         kind: "issue",
         createdAt: "2026-08-04T12:00:00Z",
         closedAt: "2026-08-04T12:00:01Z",
@@ -26,6 +27,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
       },
       {
         number: 2,
+        title: "Update documentation",
         kind: "pr",
         createdAt: "2026-08-31T11:59:59Z",
         closedAt: null,
@@ -34,14 +36,23 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
     ],
   });
   const html = fs.readFileSync(renderReport(history, directory), "utf8");
+  assert.ok(!html.includes('</script><img'), "titles must not break out of the embedded script");
   const ids = new Set(
     [...html.matchAll(/id="([^"]+)"/g)].map((m) => `#${m[1]}`),
   );
   const nodes = new Map();
+  const createElement = (tagName) => ({
+    tagName,
+    textContent: "",
+    children: [],
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+  });
   const get = (id) => {
     assert.ok(ids.has(id), `Missing report element ${id}`);
     if (!nodes.has(id))
       nodes.set(id, {
+        ...createElement("div"),
         textContent: "",
         value: "",
         addEventListener(event, handler) {
@@ -59,7 +70,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   const histograms = new Map();
   const histogramCalls = [];
   await vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], {
-    document: { querySelector: get },
+    document: { querySelector: get, createElement },
     Plotly: {
       react: (id, series, layout) => {
         assert.ok(ids.has(`#${id}`));
@@ -104,6 +115,15 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#openPRs-max-count").textContent, "1");
   assert.equal(get("#duration-issues-count").textContent, "1");
   assert.equal(get("#duration-issues-median").textContent, "1 s");
+  const issueRanking = get("#ranking-issue-longest").children;
+  assert.equal(issueRanking.length, 1);
+  assert.equal(issueRanking[0].children[1].children[0].textContent, '#1 · Fix </script><img src=x onerror=alert(1)> & "examples"');
+  assert.equal(issueRanking[0].children[1].children[0].href, "https://github.com/mdn/content/issues/1");
+  assert.equal(issueRanking[0].children[1].children[0].target, "_blank");
+  assert.equal(issueRanking[0].children[1].children[0].rel, "noopener noreferrer");
+  assert.equal(issueRanking[0].children[2].textContent, "1 s");
+  assert.equal(issueRanking[0].children[4].children[0].dateTime, "2026-08-04T12:00:01.000Z");
+  assert.equal(get("#ranking-pr-shortest").children[0].children[0].textContent, "No PRs closed in this period.");
   assert.equal(get("#duration-prs-count").textContent, "0");
   assert.equal(get("#duration-prs-average").textContent, "—");
   assert.equal(get("#age-issues-count").textContent, "0");
@@ -146,6 +166,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#openIssues-min-count").textContent, "1");
   assert.equal(get("#duration-issues-count").textContent, "0");
   assert.equal(get("#duration-issues-min").textContent, "—");
+  assert.equal(get("#ranking-issue-longest").children[0].children[0].textContent, "No issues closed in this period.");
   assert.deepEqual(
     [...histograms.get("duration-issues-histogram").series[0].y],
     [],
@@ -243,6 +264,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.deepEqual(saved.timeline, history.timeline);
   assert.deepEqual(saved.analytics, history.analytics);
   assert.equal(get("#duration-issues-count").textContent, "1");
+  assert.equal(get("#ranking-issue-shortest").children[0].children[1].children[0].textContent, '#1 · Fix </script><img src=x onerror=alert(1)> & "examples"');
   assert.equal(
     histogramCalls.filter((id) => id === "age-issues-histogram").length,
     1,

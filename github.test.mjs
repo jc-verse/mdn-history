@@ -16,6 +16,7 @@ const pageInfo = (more, cursor) => ({ hasNextPage: more, endCursor: cursor });
 const record = (number) => ({
   id: `id-${number}`,
   number,
+  title: `Item ${number}`,
   createdAt: "2020-09-15T12:00:00Z",
   updatedAt: date,
   closedAt: null,
@@ -56,9 +57,21 @@ test("paginates long timelines without truncating reopen events", async () => {
     input,
     "issues",
   );
+  assert.equal(output.title, "Item 1");
   assert.deepEqual(
     output.events.map((e) => e.type),
     ["ClosedEvent", "ReopenedEvent"],
+  );
+});
+
+test("rejects API records without titles before fetching timeline pages", async () => {
+  await assert.rejects(
+    completeTimeline(
+      async () => assert.fail("missing titles must fail immediately"),
+      { ...record(7), title: undefined },
+      "issues",
+    ),
+    /Missing title for #7/,
   );
 });
 
@@ -185,6 +198,7 @@ async function seedCache(t, { legacy = false } = {}) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const items = [1, 2, 3].map((number) => ({
     number,
+    title: `Item ${number}`,
     kind: number === 3 ? "pr" : "issue",
     createdAt: "2020-09-15T12:00:00Z",
     closedAt: null,
@@ -224,6 +238,19 @@ async function seedCache(t, { legacy = false } = {}) {
     log: () => {},
   };
 }
+
+test("missing cached titles fail instead of triggering compatibility requests", async (t) => {
+  const options = await seedCache(t);
+  const snapshot = readSnapshot(options.directory);
+  delete snapshot.items[0].title;
+  fs.writeFileSync(
+    path.join(options.directory, "snapshot.json"),
+    JSON.stringify(snapshot),
+  );
+  assert.throws(() => readSnapshot(options.directory), /Missing title for #1/);
+  options.client = async () => assert.fail("no compatibility requests");
+  await assert.rejects(collect(options), /Missing title for #1/);
+});
 
 test("refreshes only recent records, merging creations, closures, reopens and merges into existing history", async (t) => {
   const options = await seedCache(t);

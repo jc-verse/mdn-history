@@ -6,6 +6,7 @@ const at = (day, time = "12:00:00") =>
   `2026-08-${String(day).padStart(2, "0")}T${time}Z`;
 const item = (number, kind, createdAt, events = [], closedAt = null) => ({
   number,
+  title: `Item ${number}`,
   kind,
   createdAt,
   events,
@@ -150,4 +151,13 @@ test("an empty repository produces zeroes and malformed dates are rejected", () 
   );
   assert.throws(() => weeklySamples("invalid", at(31)), /Invalid timestamp/);
   assert.throws(() => weeklySamples(at(31), at(1)), /after/);
+});
+
+test("every item requires a nonempty title, including open items", () => {
+  for (const title of [undefined, null, "", "  ", 123]) {
+    assert.throws(
+      () => buildHistory(snapshot([{ ...item(7, "issue", at(1)), title }])),
+      /Missing title for #7/,
+    );
+  }
 });
