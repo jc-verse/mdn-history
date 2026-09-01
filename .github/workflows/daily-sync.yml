@@ -78,37 +78,30 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Configure Cloudflare deployment
-        if: ${{ vars.CLOUDFLARE_WORKER_NAME != '' }}
+      - name: Validate Cloudflare Pages credentials
+        if: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME != '' }}
         env:
-          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           : "${CLOUDFLARE_API_TOKEN:?Set the CLOUDFLARE_API_TOKEN Actions secret}"
           : "${CLOUDFLARE_ACCOUNT_ID:?Set the CLOUDFLARE_ACCOUNT_ID Actions secret}"
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const config = JSON.parse(fs.readFileSync('wrangler.json', 'utf8'));
-          config.name = process.env.CLOUDFLARE_WORKER_NAME;
-          fs.writeFileSync('wrangler.json', JSON.stringify(config, null, 2));
-          NODE
 
-      - name: Deploy report to Cloudflare Workers
-        if: ${{ vars.CLOUDFLARE_WORKER_NAME != '' }}
+      - name: Deploy report to Cloudflare Pages
+        if: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME != '' }}
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: pages deploy output --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME }}
 
       - name: Report publication status
         env:
-          WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+          PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME }}
         run: |
-          if [ -n "$WORKER_NAME" ]; then
-            echo 'Updated GitHub history and deployed the report to Cloudflare.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$PAGES_PROJECT_NAME" ]; then
+            echo 'Updated GitHub history and deployed the report to Cloudflare Pages.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Updated GitHub history. Download mdn-history-report from this run.' >> "$GITHUB_STEP_SUMMARY"
-            echo 'Cloudflare deployment is not configured; see the README for the required settings.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Cloudflare Pages deployment is not configured; see the README for the required settings.' >> "$GITHUB_STEP_SUMMARY"
           fi

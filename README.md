@@ -52,25 +52,25 @@ The `cache-seed` GitHub release contains an initial `snapshot.json` taken from t
 
 Actions restores and saves caches under the `history-v3-titles-` prefix, excluding older caches without titles. Each run saves a new cache entry; subsequent runs restore the newest matching entry. The release seed must also contain titles for every item, but it does not need a daily upload.
 
-### Cloudflare deployment
+### Cloudflare Pages deployment
 
-Daily sync works without Cloudflare credentials and always saves its report as a downloadable Actions artifact. To also update your existing **Worker**, set these under **Settings → Secrets and variables → Actions**:
+Daily sync works without Cloudflare credentials and always saves its report as a downloadable Actions artifact. To also update your existing **Cloudflare Pages project**, set these under **Settings → Secrets and variables → Actions**:
 
 | Kind | Name | Value |
 | --- | --- | --- |
-| Secret | `CLOUDFLARE_API_TOKEN` | An API token authorized to deploy the Worker |
-| Secret | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing that Worker |
-| Variable | `CLOUDFLARE_WORKER_NAME` | The exact existing Worker name |
+| Secret | `CLOUDFLARE_API_TOKEN` | An API token with Account → Cloudflare Pages → Edit permission |
+| Secret | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing that Pages project |
+| Variable | `CLOUDFLARE_PAGES_PROJECT_NAME` | The exact existing Pages project name, such as `mdn-history` |
 
-When the Worker-name variable is empty, deployment is skipped. Once it is set, missing credentials fail the deployment step visibly. The workflow overrides the default `name` in `wrangler.json` with that variable and deploys only `output/` as static assets. It does not configure custom domains or DNS.
+When the Pages-project variable is empty, deployment is skipped. Once it is set, missing credentials fail the deployment step visibly. The workflow runs `wrangler pages deploy output --project-name=...` and uploads the generated static report to that Pages project. The `pages_build_output_dir` setting in `wrangler.json` identifies `output/` as the Pages build output. Configure the Pages project's production branch as `main` so daily runs update production; manual runs from other branches create preview deployments. See [Cloudflare's Pages CI guide](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/) for token setup and deployment details.
 
 For a manual deployment after generating the report and authenticating Wrangler:
 
 ```sh
-npx wrangler deploy --name YOUR_WORKER_NAME
+npx wrangler pages deploy output --project-name YOUR_PAGES_PROJECT_NAME --branch main
 ```
 
-The committed configuration defaults to a Worker named `mdn-history` for local use. Set the name to match your intended target before deploying.
+The committed configuration names the Pages project `mdn-history`. The `--project-name` flag selects the intended Pages project when deploying.
 
 ## Counting and dates
 
