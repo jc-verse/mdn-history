@@ -45,6 +45,8 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
     ],
   });
   const html = fs.readFileSync(renderReport(history, directory), "utf8");
+  assert.deepEqual(fs.readdirSync(directory).sort(), ["index.html", "plotly.min.js"]);
+  assert.doesNotMatch(html, /(?:href|src)=["']history\.(json|csv)["']/i);
   assert.ok(!html.includes('</script><img'), "titles must not break out of the embedded script");
   const ids = new Set(
     [...html.matchAll(/id="([^"]+)"/g)].map((m) => `#${m[1]}`),
@@ -302,9 +304,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   submit("2026-08-01", "2026-08-31");
   assert.equal(error.textContent, "");
   assert.equal(get("#sample-precision").textContent, "Weekly samples");
-  const saved = JSON.parse(
-    fs.readFileSync(path.join(directory, "history.json")),
-  );
+  const saved = JSON.parse(html.match(/const reportHistory = (.+);\n/)[1]);
   assert.deepEqual(saved.timeline, history.timeline);
   assert.deepEqual(saved.analytics, history.analytics);
   assert.equal(get("#duration-issues-count").textContent, "1");
@@ -320,4 +320,8 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   );
   assert.equal(get("#age-prs-median").textContent, "1 s");
   assert.ok(fs.existsSync(path.join(directory, "plotly.min.js")));
+  for (const name of ["history.json", "history.csv"])
+    fs.writeFileSync(path.join(directory, name), "stale export");
+  renderReport(history, directory);
+  assert.deepEqual(fs.readdirSync(directory).sort(), ["index.html", "plotly.min.js"], "regeneration removes stale exports from the published bundle");
 });

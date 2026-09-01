@@ -25,7 +25,7 @@ Authentication: GH_TOKEN, GITHUB_TOKEN, or an existing gh auth login.
   --offline       Render the last complete snapshot without network access
   --fresh         Rebuild all history, bypassing the incremental cache
   --cache PATH    Download/checkpoint directory (default: beside this script)
-  --output PATH   HTML, Plotly, CSV and JSON directory (default: output/)
+  --output PATH   HTML and Plotly directory (default: output/)
   -h, --help      Show help
 
 Normal runs fetch recently updated issues/PRs and reuse cached history.
