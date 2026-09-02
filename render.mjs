@@ -84,7 +84,12 @@ export function renderReport(history, directory) {
       range: [history.startAt, history.asOf],
       gridcolor: "#edf0f4",
       showgrid: false,
-      rangeslider: { visible: true, thickness: 0.1, bgcolor: "#f5f7fa" },
+      rangeslider: {
+        visible: true,
+        thickness: 0.1,
+        bgcolor: "#f5f7fa",
+        yaxis: { rangemode: "auto" },
+      },
       rangeselector: {
         x: 1,
         xanchor: "right",

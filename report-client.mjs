@@ -19,6 +19,43 @@ export function mountRangeSummary(
       .replace(/\.000Z$/, "Z")
       .replace("Z", " UTC");
   let lastSamplingRange;
+  let plottedPoints = history.weekly;
+  const fitYAxis = () => {
+    const visible = findExtrema(history, ...plot.layout.xaxis.range);
+    let min = Infinity;
+    let max = -Infinity;
+    const include = (value) => {
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+    };
+    if (visible) {
+      for (const [index, key] of ["openIssues", "openPRs"].entries()) {
+        const visibility = plot.data[index].visible;
+        if (visibility === false || visibility === "legendonly") continue;
+        for (let i = 0; i < plottedPoints.length; i++) {
+          const point = plottedPoints[i];
+          if (point.at >= visible.start && point.at <= visible.end)
+            include(point[key]);
+          // Include the line where it crosses either edge, even when there
+          // are no samples inside the viewport. Off-screen peaks don't count.
+          const previous = plottedPoints[i - 1];
+          if (!previous) continue;
+          for (const edge of [visible.start, visible.end]) {
+            if (previous.at < edge && edge < point.at)
+              include(previous[key] + (point[key] - previous[key]) *
+                (edge - previous.at) / (point.at - previous.at));
+          }
+        }
+      }
+    }
+    const padding = Math.max((max - min) * 0.05, 1);
+    const range = Number.isFinite(min)
+      ? [Math.max(0, min - padding), max + padding]
+      : [0, 1];
+    if (plot.layout.yaxis.autorange === false &&
+        range.every((value, i) => value === plot.layout.yaxis.range?.[i])) return;
+    relayout(plot, { "yaxis.range": range, "yaxis.autorange": false });
+  };
   const update = (range) => {
     const result = findExtrema(history, range[0], range[1]);
     document.querySelector("#range-period").textContent = result
@@ -42,7 +79,10 @@ export function mountRangeSummary(
       }
     }
     const samplingRange = result ? `${result.start}:${result.end}` : "outside";
-    if (samplingRange === lastSamplingRange) return;
+    if (samplingRange === lastSamplingRange) {
+      fitYAxis();
+      return;
+    }
     lastSamplingRange = samplingRange;
     updateStatistics(result);
     const samples = result
@@ -59,16 +99,26 @@ export function mountRangeSummary(
     const dates = samples.points.map((point) =>
       new Date(point.at).toISOString(),
     );
+    plottedPoints = samples.points;
     restyle(plot, {
       x: [dates, dates],
       y: ["openIssues", "openPRs"].map((key) =>
         samples.points.map((point) => point[key]),
       ),
     });
+    fitYAxis();
   };
   update(plot.layout.xaxis.range);
   // Zoom, pan, range-slider drags, presets, and reset all change this range.
-  plot.on("plotly_relayout", () => update(plot.layout.xaxis.range));
+  plot.on("plotly_relayout", (changes) => {
+    // Ignore our own y-axis relayouts (and unrelated layout changes).
+    if (Object.keys(changes).some((key) => key.startsWith("xaxis.range") ||
+        key === "xaxis.autorange") || changes["yaxis.autorange"] === true)
+      update(plot.layout.xaxis.range);
+  });
+  plot.on("plotly_restyle", ([changes]) => {
+    if ("visible" in changes) fitYAxis();
+  });
   // Box selection uses its continuous x range, never just selected weekly dots.
   plot.on("plotly_selected", (event) => {
     if (event?.range?.x) update(event.range.x);
