@@ -22,10 +22,8 @@ export function mountRangeSummary(
   let plottedPoints = history.weekly;
   const fitYAxis = () => {
     const visible = findExtrema(history, ...plot.layout.xaxis.range);
-    let min = Infinity;
     let max = -Infinity;
     const include = (value) => {
-      min = Math.min(min, value);
       max = Math.max(max, value);
     };
     if (visible) {
@@ -48,9 +46,9 @@ export function mountRangeSummary(
         }
       }
     }
-    const padding = Math.max((max - min) * 0.05, 1);
-    const range = Number.isFinite(min)
-      ? [Math.max(0, min - padding), max + padding]
+    const padding = Math.max(max * 0.05, 1);
+    const range = Number.isFinite(max)
+      ? [0, max + padding]
       : [0, 1];
     if (plot.layout.yaxis.autorange === false &&
         range.every((value, i) => value === plot.layout.yaxis.range?.[i])) return;

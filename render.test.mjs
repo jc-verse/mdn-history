@@ -10,7 +10,7 @@ import { mountRangeSummary } from "./report-client.mjs";
 import { findExtrema } from "./extrema.mjs";
 import { sampleRange } from "./sampling.mjs";
 
-test("y-axis fits visible lines on zoom, pan, reset, and legend changes", () => {
+test("y-axis starts at zero and fits visible lines on zoom, pan, reset, and legend changes", () => {
   const point = (date, openIssues, openPRs = 20) => ({
     at: Date.parse(date), openIssues, openPRs,
   });
@@ -42,6 +42,7 @@ test("y-axis fits visible lines on zoom, pan, reset, and legend changes", () => 
   });
   mount(plot, history, findExtrema, sampleRange, () => {}, (_, changes) => {
     assert.ok(++relayoutCount < 30, "axis updates must not cause a relayout loop");
+    assert.equal(changes["yaxis.range"][0], 0, "the y-axis must always start at zero");
     plot.layout.yaxis.range = changes["yaxis.range"];
     plot.layout.yaxis.autorange = changes["yaxis.autorange"];
     listeners.plotly_relayout?.(changes);
@@ -55,42 +56,42 @@ test("y-axis fits visible lines on zoom, pan, reset, and legend changes", () => 
     plot.data[index].visible = visible;
     listeners.plotly_restyle([{ visible: [visible] }, [index]]);
   };
-  assert.deepEqual(axis(), [0, 1049]);
+  assert.deepEqual(axis(), [0, 1050]);
   zoom("2026-07-01", "2026-08-31");
-  assert.deepEqual(axis(), [15, 125], "off-screen peak must not determine the scale");
+  assert.deepEqual(axis(), [0, 126], "off-screen peak must not determine the scale");
   show(1, "legendonly");
-  assert.deepEqual(axis(), [99, 121], "hidden PRs must not force the axis toward zero");
+  assert.deepEqual(axis(), [0, 126], "hiding PRs must preserve the zero baseline");
 
   zoom("2026-06-30", "2026-08-02");
-  assert.deepEqual(axis(), [98.5, 131.5], "include interpolated values at viewport edges");
+  assert.deepEqual(axis(), [0, 136.5], "include interpolated values at viewport edges");
   zoom("2026-07-01T06:00:00Z", "2026-07-31T18:00:00Z");
-  assert.ok(Math.abs(axis()[0] - (99 + 2.5 / 31)) < 1e-9);
-  assert.ok(Math.abs(axis()[1] - (111 - 2.5 / 31)) < 1e-9,
+  assert.equal(axis()[0], 0);
+  assert.ok(Math.abs(axis()[1] - (110 - 2.5 / 31) * 1.05) < 1e-9,
     "a viewport between weekly samples must fit the line crossing it");
   zoom("2026-07-02", "2026-07-03");
-  assert.deepEqual(axis(), [99, 101], "constant intraday counts need a nonzero range");
+  assert.deepEqual(axis(), [0, 105], "constant intraday counts need a nonzero range");
   show(0, false);
   assert.deepEqual(axis(), [0, 1], "all-hidden data needs a finite fallback");
   show(1, true);
-  assert.deepEqual(axis(), [19, 21]);
+  assert.deepEqual(axis(), [0, 21]);
   show(0, true);
-  assert.deepEqual(axis(), [16, 104]);
+  assert.deepEqual(axis(), [0, 105]);
   zoom("2026-08-02", "2026-08-03");
-  assert.deepEqual(axis(), [15.5, 114.5], "panning should refit the axis");
+  assert.deepEqual(axis(), [0, 115.5], "panning should refit the axis");
 
   listeners.plotly_selected({ range: { x: ["2026-06-01", "2026-06-02"] } });
-  assert.ok(Math.abs(axis()[1] - 115.2) < 1e-9,
+  assert.ok(Math.abs(axis()[1] - 116.2) < 1e-9,
     "box selection must fit the viewport, not the selected period");
   zoom("2027-01-01", "2027-01-02");
   assert.deepEqual(axis(), [0, 1]);
   plot.layout.xaxis.range = ["2026-06-01", history.asOf];
   plot.layout.yaxis.autorange = true;
   listeners.plotly_relayout({ "xaxis.autorange": true, "yaxis.autorange": true });
-  assert.deepEqual(axis(), [0, 1049], "reset restores the full-history scale");
+  assert.deepEqual(axis(), [0, 1050], "reset restores the full-history scale");
   plot.layout.yaxis.range = [0, 5000];
   plot.layout.yaxis.autorange = true;
   listeners.plotly_relayout({ "yaxis.autorange": true });
-  assert.deepEqual(axis(), [0, 1049], "autoscale refits even when the date range is unchanged");
+  assert.deepEqual(axis(), [0, 1050], "autoscale refits even when the date range is unchanged");
 });
 
 test("offline report updates exact extrema on zoom, slider, selection, and reset", async (t) => {
