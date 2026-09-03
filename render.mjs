@@ -81,7 +81,8 @@ export function renderReport(history, directory) {
     xaxis: {
       type: "date",
       hoverformat: "%Y-%m-%d %H:%M UTC",
-      range: [history.startAt, history.asOf],
+      // mdn/content's exact creation timestamp from GitHub.
+      range: ["2020-09-15T15:42:29.000Z", history.asOf],
       gridcolor: "#edf0f4",
       showgrid: false,
       rangeslider: {

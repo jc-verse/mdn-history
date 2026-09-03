@@ -195,6 +195,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
       },
       newPlot: async (id, series, layout) => {
         assert.equal(id, "plot");
+        assert.equal(layout.xaxis.range[0], "2020-09-15T15:42:29.000Z");
         assert.equal(series[0].x.at(-1), "2026-08-31T12:00:00.000Z");
         for (const count of [7, 30]) {
           const preset = layout.xaxis.rangeselector.buttons.find(
