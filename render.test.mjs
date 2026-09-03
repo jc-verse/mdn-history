@@ -236,9 +236,10 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#age-issues-count").textContent, "0");
   assert.equal(get("#age-prs-count").textContent, "1");
   assert.equal(get("#age-prs-median").textContent, "1 s");
+  assert.equal(get("#age-prs-scope").textContent, "At selection end: 2026-08-31 12:00:00 UTC");
   assert.equal(histograms.get("age-prs-histogram").series[0].y[0], 1);
-  assert.equal(get("#flow-total").textContent, "0");
-  assert.equal(get("#pr-flow-total").textContent, "+1");
+  assert.equal(get("#turnaround-issues-net-total").textContent, "0");
+  assert.equal(get("#turnaround-prs-net-total").textContent, "+1");
   assert.equal(get("#turnaround-issues-opened-total").textContent, "1");
   assert.equal(get("#turnaround-issues-closed-total").textContent, "1");
   assert.equal(get("#turnaround-prs-opened-total").textContent, "1");
@@ -278,6 +279,10 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#openIssues-min-count").textContent, "1");
   assert.equal(get("#duration-issues-count").textContent, "0");
   assert.equal(get("#duration-issues-min").textContent, "—");
+  assert.equal(get("#age-issues-count").textContent, "1");
+  assert.equal(get("#age-issues-median").textContent, "0.75 s");
+  assert.equal(get("#age-issues-scope").textContent, "At selection end: 2026-08-04 12:00:00.750 UTC");
+  assert.equal(get("#age-prs-count").textContent, "0", "items created after the right boundary are excluded");
   assert.equal(get("#ranking-issue-longest").children[0].children[0].textContent, "No issues with additional interaction closed in this period.");
   assert.deepEqual(
     [...histograms.get("duration-issues-histogram").series[0].y],
@@ -301,8 +306,8 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   listeners.plotly_relayout({ "xaxis.range": graph.layout.xaxis.range });
   assert.equal(get("#sample-precision").textContent, "Hourly samples");
   assert.equal(get("#sample-count").textContent, "169");
-  assert.equal(get("#flow-total").textContent, "0");
-  assert.equal(get("#pr-flow-week").textContent, "+1");
+  assert.equal(get("#turnaround-issues-net-total").textContent, "0");
+  assert.equal(get("#turnaround-prs-net-week").textContent, "+1");
   assert.equal(get("#turnaround-issues-opened-total").textContent, "0");
   assert.equal(get("#turnaround-issues-closed-total").textContent, "0");
   assert.equal(get("#turnaround-prs-opened-week").textContent, "1");
@@ -313,14 +318,14 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
     range: { x: ["2026-08-31T11:59:59Z", "2026-08-31T11:59:59Z"] },
     points: [],
   });
-  assert.equal(get("#pr-flow-total").textContent, "+1");
-  assert.equal(get("#pr-flow-day").textContent, "—");
+  assert.equal(get("#turnaround-prs-net-total").textContent, "+1");
+  assert.equal(get("#turnaround-prs-net-day").textContent, "—");
+  assert.equal(get("#age-prs-median").textContent, "0 s");
   assert.equal(get("#turnaround-prs-opened-total").textContent, "1");
   assert.equal(get("#turnaround-prs-opened-day").textContent, "—");
   assert.equal(get("#turnaround-issues-closed-month").textContent, "—");
-  assert.match(get("#pr-flow-detail").textContent, /nonzero interval/);
   listeners.plotly_deselect();
-  assert.equal(get("#pr-flow-week").textContent, "+1");
+  assert.equal(get("#turnaround-prs-net-week").textContent, "+1");
 
   graph.layout.xaxis.range = ["2027-01-01", "2027-01-02"];
   listeners.plotly_relayout({
@@ -330,11 +335,14 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#openIssues-max-count").textContent, "—");
   assert.equal(get("#openIssues-max-time").dateTime, undefined);
   assert.match(get("#range-period").textContent, /outside/);
-  assert.equal(get("#flow-day").textContent, "—");
+  assert.equal(get("#age-prs-count").textContent, "0");
+  assert.equal(get("#age-prs-median").textContent, "—");
+  assert.equal(get("#age-prs-scope").textContent, "No selection within collected history");
+  assert.equal(get("#turnaround-issues-net-day").textContent, "—");
   for (const period of ["total", "day", "week", "month"]) {
-    assert.equal(get(`#pr-flow-${period}`).textContent, "—");
+    assert.equal(get(`#turnaround-prs-net-${period}`).textContent, "—");
     for (const kind of ["issues", "prs"])
-      for (const direction of ["opened", "closed"])
+      for (const direction of ["opened", "closed", "net"])
         assert.equal(get(`#turnaround-${kind}-${direction}-${period}`).textContent, "—");
   }
   assert.equal(get("#duration-issues-count").textContent, "0");
@@ -369,6 +377,8 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#sample-precision").textContent, "Hourly samples");
   submit("2026-08-01", "2026-08-30");
   assert.equal(get("#sample-precision").textContent, "6-hour samples");
+  assert.equal(get("#age-prs-count").textContent, "0");
+  assert.equal(get("#age-prs-scope").textContent, "At selection end: 2026-08-30 23:59:59.999 UTC");
   submit("2026-08-25", "2026-08-31");
   assert.equal(
     graph.layout.xaxis.range[1],
@@ -377,7 +387,7 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   );
   assert.equal(get("#sample-precision").textContent, "Hourly samples");
   assert.equal(get("#openPRs-max-count").textContent, "1");
-  assert.equal(get("#pr-flow-total").textContent, "+1");
+  assert.equal(get("#turnaround-prs-net-total").textContent, "+1");
   assert.equal(get("#turnaround-prs-opened-total").textContent, "1");
   assert.equal(get("#turnaround-issues-closed-total").textContent, "0");
   const validRange = [...graph.layout.xaxis.range];
@@ -411,12 +421,12 @@ test("offline report updates exact extrema on zoom, slider, selection, and reset
   assert.equal(get("#ranking-issue-shortest").children[0].children[1].children[0].textContent, '#1 · Fix </script><img src=x onerror=alert(1)> & "examples"');
   assert.equal(
     histogramCalls.filter((id) => id === "age-issues-histogram").length,
-    1,
-    "fetch-age histogram stays fixed across selections",
+    histogramCalls.filter((id) => id === "duration-issues-histogram").length,
+    "open-age histogram updates with each selection",
   );
   assert.equal(
     histogramCalls.filter((id) => id === "age-prs-histogram").length,
-    1,
+    histogramCalls.filter((id) => id === "duration-prs-histogram").length,
   );
   assert.equal(get("#age-prs-median").textContent, "1 s");
   assert.ok(fs.existsSync(path.join(directory, "plotly.min.js")));

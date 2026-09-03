@@ -72,6 +72,22 @@ export function summarizeDistribution(values, { logarithmic = false } = {}) {
 }
 
 export function selectedStatistics(analytics, range, summarize) {
+  const openAges = { issue: [], pr: [] };
+  if (range) {
+    // Scraped-open items remain open from creation. Scraped-closed items are
+    // considered open until their final closure, ignoring intermediate events.
+    for (const [kind, creations] of [
+      ["issue", analytics.openIssueCreated],
+      ["pr", analytics.openPRCreated],
+    ]) {
+      for (const created of creations)
+        if (created <= range.end)
+          openAges[kind].push((range.end - created) / 86400000);
+    }
+    for (const closure of analytics.closures)
+      if (closure.created <= range.end && closure.at > range.end)
+        openAges[closure.kind].push((range.end - closure.created) / 86400000);
+  }
   const latestClosures = new Map();
   if (range) {
     for (const closure of analytics.closures) {
@@ -112,29 +128,30 @@ export function selectedStatistics(analytics, range, summarize) {
   };
   const summarizeFlow = (activity) => {
     let created = 0;
-    let reopened = 0;
     let closed = 0;
     if (range) {
       for (const event of activity) {
         if (event.at > range.end) break;
         if (event.at < range.start) continue;
         if (event.type === "created") created++;
-        else if (event.type === "reopened") reopened++;
         else if (event.type === "closed") closed++;
       }
     }
-    const { total: net, ...netRates } = rates(created + reopened - closed);
-    return { created, reopened, closed, net, days, ...netRates };
+    const { total: net, ...netRates } = rates(created - closed);
+    return { created, closed, net, days, ...netRates };
   };
   const flow = summarizeFlow(analytics.issueActivity);
   const prFlow = summarizeFlow(analytics.prActivity);
   const turnaround = (flow) => ({
-    opened: rates(flow.created + flow.reopened),
+    opened: rates(flow.created),
     closed: rates(flow.closed),
+    net: rates(flow.net),
   });
   return {
     issues: summarize(durations.issue, { logarithmic: true }),
     prs: summarize(durations.pr, { logarithmic: true }),
+    openIssueAges: summarize(openAges.issue),
+    openPRAges: summarize(openAges.pr),
     rankings,
     flow,
     prFlow,

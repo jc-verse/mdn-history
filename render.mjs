@@ -155,14 +155,14 @@ export function renderReport(history, directory) {
     ],
     [
       "age-issues",
-      "Current open issue age",
-      `Fixed at fetch: ${history.analytics.ageAsOf.replace("T", " ").replace(/\.\d+Z$/, " UTC")}`,
+      "Open issue age at selection end",
+      "At selection end",
       "ages",
     ],
     [
       "age-prs",
-      "Current open PR age",
-      `Fixed at fetch: ${history.analytics.ageAsOf.replace("T", " ").replace(/\.\d+Z$/, " UTC")}`,
+      "Open PR age at selection end",
+      "At selection end",
       "pr-ages",
     ],
   ]
@@ -174,7 +174,7 @@ export function renderReport(history, directory) {
         color,
       ]) => `<section class="distribution-card" aria-labelledby="${id}-title">
 <h3 id="${id}-title" class="${color}">${title}</h3>
-<p class="distribution-scope">${scope}<br><strong id="${id}-count">0</strong> items</p>
+<p class="distribution-scope"><span id="${id}-scope">${scope}</span><br><strong id="${id}-count">0</strong> items</p>
 <dl class="distribution-values">${[
         ["min", "Min"],
         ["max", "Max"],
@@ -199,24 +199,14 @@ export function renderReport(history, directory) {
     ["week", "Per week"],
     ["month", "Per 30-day month"],
   ];
-  const flowCards = [
-    ["flow", "Net issue change", "issues"],
-    ["pr-flow", "Net PR change", "prs"],
-  ].map(([id, title, color]) => `<section class="flow-card" aria-labelledby="${id}-card-title">
-<h3 id="${id}-card-title" class="${color}">${title}</h3>
-<dl class="flow-values">${flowPeriods.map(([period, label]) =>
-    `<div><dt>${label}</dt><dd id="${id}-${period}">—</dd></div>`,
-  ).join("")}</dl>
-<p id="${id}-detail" class="analytics-help"></p>
-</section>`).join("");
   const turnaroundCards = [
     ["issues", "Issue turnaround"],
     ["prs", "PR turnaround"],
   ].map(([kind, title]) => `<section class="flow-card" aria-labelledby="turnaround-${kind}-title">
 <h3 id="turnaround-${kind}-title" class="${kind}">${title}</h3>
-<table class="turnaround-table"><thead><tr><th scope="col">Time span</th><th scope="col">Opened</th><th scope="col">Closed</th></tr></thead>
+<table class="turnaround-table"><thead><tr><th scope="col">Time span</th><th scope="col">Opened</th><th scope="col">Closed</th><th scope="col">Net</th></tr></thead>
 <tbody>${flowPeriods.map(([period, label]) =>
-    `<tr><th scope="row">${label}</th>${["opened", "closed"].map((direction) =>
+    `<tr><th scope="row">${label}</th>${["opened", "closed", "net"].map((direction) =>
       `<td id="turnaround-${kind}-${direction}-${period}">—</td>`,
     ).join("")}</tr>`,
   ).join("")}</tbody></table>
@@ -243,8 +233,8 @@ export function renderReport(history, directory) {
 *{box-sizing:border-box}body{margin:0;background:#f4f6f9;color:#17263b;font-family:Inter,system-ui,-apple-system,sans-serif}main{max-width:1440px;margin:0 auto;padding:44px 36px}.eyebrow{color:#617088;font-size:12px;letter-spacing:.12em;font-weight:700;text-transform:uppercase}h1{font-size:clamp(26px,3vw,40px);letter-spacing:-.04em;margin:12px 0}p{line-height:1.7;color:#617088;font-size:14px}.stats{display:flex;gap:36px;margin:28px 0}.stat{padding-right:36px;border-right:1px solid #d9e1eb}.stat:last-child{border:0}.stat strong{display:block;font-size:34px;letter-spacing:-.04em}.stat span{font-size:12px;color:#617088}.issues{color:#2165d6}.prs{color:#b64b25}.panel{background:white;border:1px solid #e0e6ef;border-radius:16px;padding:30px 10px 8px;box-shadow:0 8px 30px #26354b06}#plot{height:580px;width:100%}.footer{display:flex;justify-content:space-between;gap:24px;margin-top:18px}.footer p{margin:0;font-size:12px;max-width:1000px}a{color:#2165d6;text-decoration:none}a:hover{text-decoration:underline}@media(max-width:700px){main{padding:24px 12px}.stats{gap:18px}.stat{padding-right:18px}.stat strong{font-size:28px}.footer{display:block}#plot{height:480px}.panel{padding-top:40px}}
 .range-summary{margin:28px 0 24px}.range-summary h2{font-size:20px;letter-spacing:-.025em;margin:0 0 6px}.range-period{font-size:13px;font-variant-numeric:tabular-nums;margin:0;color:#29374b}.range-help{max-width:1000px;font-size:12px;margin:8px 0 16px}.extrema-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.extrema-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 24px;min-width:0}.extrema-card h3{font-size:14px;margin:0 0 16px}.extrema-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.extrema-label{display:block;color:#617088;font-size:12px}.extrema-values strong{display:block;font-size:32px;letter-spacing:-.04em;margin:4px 0}.extrema-values time{display:block;font-size:11px;line-height:1.6;color:#617088;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}@media(max-width:700px){.extrema-grid{grid-template-columns:1fr}.extrema-card{padding:18px}}
 .custom-range{margin:0 0 18px;background:white;border:1px solid #e0e6ef;border-radius:12px;padding:14px 20px}.custom-range summary{cursor:pointer;font-size:14px;font-weight:600;color:#2165d6}.custom-range form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;margin-top:16px}.custom-range label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#617088}.custom-range input,.custom-range button{font:inherit;font-size:14px;border:1px solid #cbd5e1;border-radius:6px;padding:9px 12px;min-height:40px}.custom-range button{background:#2165d6;color:white;border-color:#2165d6;cursor:pointer}.custom-range :focus-visible{outline:2px solid #2165d6;outline-offset:3px}.custom-range .date-help{font-size:12px;margin:12px 0 0}.custom-range .date-error{font-size:13px;color:#a52626;margin:8px 0 0}.date-error:empty{display:none}
-.analytics-section{margin:28px 0}.analytics-section h2{font-size:20px;letter-spacing:-.025em;margin:0 0 8px}.analytics-help{font-size:12px;max-width:1100px;margin:0 0 16px}.distribution-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.distribution-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 16px 8px;min-width:0}.distribution-card h3{font-size:15px;margin:0 0 8px}.ages{color:#168273}.pr-ages{color:#7b57b5}.distribution-scope{font-size:11px;line-height:1.7;min-height:38px;margin:0 0 14px}.distribution-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 10px;margin:0}.distribution-values dt{font-size:11px;color:#617088}.distribution-values dd{font-size:19px;font-weight:600;margin:4px 0 0;font-variant-numeric:tabular-nums}.histogram{height:260px;width:100%}.distribution-scope:empty{display:none}.flow-values{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:16px 0}.flow-values div{min-width:0}.flow-values dt{font-size:12px;color:#617088}.flow-values dd{font-size:24px;letter-spacing:-.03em;margin:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums}@media(max-width:700px){.distribution-grid{grid-template-columns:1fr}.distribution-card{padding:20px 24px 8px}.distribution-values{grid-template-columns:repeat(3,minmax(0,1fr))}.flow-values{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.flow-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.flow-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 24px;min-width:0}.flow-card h3{font-size:15px;margin:0 0 16px}.flow-card .analytics-help{margin:16px 0 0;line-height:1.6}.turnaround-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.turnaround-table th,.turnaround-table td{padding:12px 0;border-bottom:1px solid #edf0f4;text-align:right}.turnaround-table th{font-size:12px;color:#617088;font-weight:400}.turnaround-table th:first-child{text-align:left}.turnaround-table thead th{font-weight:600}.turnaround-table td{font-size:20px;font-weight:600}.turnaround-table tbody tr:last-child>*{border-bottom:0}@media(max-width:1100px){.flow-values{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.flow-grid{grid-template-columns:1fr}.flow-card{padding:18px}}
+.analytics-section{margin:28px 0}.analytics-section h2{font-size:20px;letter-spacing:-.025em;margin:0 0 8px}.analytics-help{font-size:12px;max-width:1100px;margin:0 0 16px}.distribution-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.distribution-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 16px 8px;min-width:0}.distribution-card h3{font-size:15px;margin:0 0 8px}.ages{color:#168273}.pr-ages{color:#7b57b5}.distribution-scope{font-size:11px;line-height:1.7;min-height:38px;margin:0 0 14px}.distribution-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 10px;margin:0}.distribution-values dt{font-size:11px;color:#617088}.distribution-values dd{font-size:19px;font-weight:600;margin:4px 0 0;font-variant-numeric:tabular-nums}.histogram{height:260px;width:100%}.distribution-scope:empty{display:none}@media(max-width:700px){.distribution-grid{grid-template-columns:1fr}.distribution-card{padding:20px 24px 8px}.distribution-values{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.flow-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.flow-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 24px;min-width:0}.flow-card h3{font-size:15px;margin:0 0 16px}.flow-card .analytics-help{margin:16px 0 0;line-height:1.6}.turnaround-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.turnaround-table th,.turnaround-table td{padding:12px 4px;border-bottom:1px solid #edf0f4;text-align:right}.turnaround-table th{font-size:12px;color:#617088;font-weight:400}.turnaround-table th:first-child{text-align:left}.turnaround-table thead th{font-weight:600}.turnaround-table td{font-size:20px;font-weight:600}.turnaround-table tbody tr:last-child>*{border-bottom:0}@media(max-width:700px){.flow-grid{grid-template-columns:1fr}.flow-card{padding:18px}.turnaround-table td{font-size:16px}}
 .ranking-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.ranking-card{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:20px 16px;min-width:0}.ranking-card h3{font-size:15px;margin:0 0 16px}.ranking-scroll{overflow-x:auto}.ranking-scroll:focus-visible{outline:2px solid #2165d6;outline-offset:3px}.ranking-table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.ranking-table th,.ranking-table td{padding:10px 8px;text-align:left;border-bottom:1px solid #edf0f4}.ranking-table th{font-size:11px;font-weight:600;color:#617088}.ranking-table td:nth-child(2){white-space:normal;min-width:160px;overflow-wrap:anywhere;line-height:1.5}.ranking-table td:first-child{color:#617088}.ranking-table td:nth-child(3){font-weight:600}.ranking-table tbody tr:last-child td{border-bottom:0}.ranking-table .ranking-empty{white-space:normal;padding:24px 8px;color:#617088}@media(max-width:1000px){.ranking-grid{grid-template-columns:1fr}}
 </style><script src="plotly.min.js"></script></head><body><main>
 <div class="eyebrow">MDN Web Docs / Repository history</div>
@@ -269,24 +259,19 @@ export function renderReport(history, directory) {
 <p class="range-help">Drag across the graph or adjust the date slider to choose a period. Ranges of 30 days or less use 6-hour samples; 7 days or less use hourly samples. Longer ranges use weekly samples. Minimum and maximum counts use every recorded event, including changes between samples. Times show the first occurrence within the selected period, in UTC.</p>
 <div class="extrema-grid" aria-live="polite" aria-atomic="true">${extremaCards}</div>
 </section>
-<section class="analytics-section" aria-labelledby="flow-title">
-<h2 id="flow-title">Net change · selected period</h2>
-<p class="analytics-help">Positive values mean the open backlog grew; negative values mean it shrank. Rates use the selected interval’s elapsed time. A week is 7 days; a month is normalized to 30 days.</p>
-<div class="flow-grid">${flowCards}</div>
-</section>
 <section class="analytics-section" aria-labelledby="turnaround-title">
 <h2 id="turnaround-title">Issue/PR turnaround · selected period</h2>
-<p class="analytics-help">Opened and closed activity is shown separately, not subtracted. Opened includes creations and reopenings; closed includes PR merges. Each actual transition counts, so an item can contribute more than once, and items need not be both opened and closed in this period. Selected period shows totals; daily, weekly, and 30-day monthly averages use the interval’s elapsed time, including inactive days. Average rates require a nonzero interval.</p>
+<p class="analytics-help">Opened counts only original creations in the selected period. Closed counts only the final closure or merge of items closed at fetch. Reopenings and earlier closures are ignored; items open at fetch are treated as continuously open since creation. Net is Opened − Closed. Items need not be both created and closed in this period. Selected period shows totals; daily, weekly, and 30-day monthly averages use the interval’s elapsed time, including inactive days. Average rates require a nonzero interval.</p>
 <div class="flow-grid">${turnaroundCards}</div>
 </section>
 <section class="analytics-section" aria-labelledby="distribution-title">
 <h2 id="distribution-title">Close times & open item ages</h2>
-<p class="analytics-help">Close time runs from original creation to the final closure as of the snapshot, when that closure falls within the selected period; PR merges count as closures. Only the latest status transition counts: reopened items have no closure sample, and earlier closures of reclosed items are excluded. Bot-authored and spam-labelled items are excluded from all age and duration statistics, but remain in backlog and activity counts. Open issue and PR ages run from creation to fetch time and stay fixed as you change the selection. Open draft PRs are included. Q1 and Q3 are the 25th and 75th percentiles, using linear interpolation. Time-to-close bins have equal widths in log space; age bins have equal widths in days. Axes start at the minimum plotted value. Zero-duration closures remain in the statistics and are noted separately from the log charts.</p>
+<p class="analytics-help">Close time runs from original creation to the final closure recorded at fetch, when that closure falls within the selected period; PR merges count as closures. Items open at fetch are treated as continuously open since creation for age statistics and have no closure sample. Items closed at fetch use only their last closure; earlier closures and reopenings are ignored. Bot-authored and spam-labelled items are excluded from age distributions and closure rankings, but remain in backlog and turnaround counts. Open issue and PR ages run from creation to the selection’s right boundary. They include items created by that time whose final closure is later, or which remain open at fetch. Items closing exactly at the boundary are excluded; the left boundary does not limit their creation dates. Open draft PRs are included. Q1 and Q3 are the 25th and 75th percentiles, using linear interpolation. Time-to-close bins have equal widths in log space; age bins have equal widths in days. Axes start at the minimum plotted value. Zero-duration closures remain in the statistics and are noted separately from the log charts.</p>
 <div class="distribution-grid">${distributionCards}</div>
 </section>
 <section class="analytics-section" aria-labelledby="rankings-title">
 <h2 id="rankings-title">Top 10 longest & shortest times to close</h2>
-<p class="analytics-help">Issues and PRs closed in the selected period, ranked separately by elapsed time from creation to their final closure as of the snapshot. Bot-authored and spam-labelled items are excluded, as are items whose latest status transition is a reopening. Only items with proof of additional interaction are included: a comment or submitted PR review by someone other than the original author (excluding bot accounts), a linked main-targeting PR on an issue, or a merged PR. Evidence reflects the latest collection, even if it occurred outside the selected period. Additional interaction is required only for these lists; age and duration distributions still include other age-eligible items. Each list shows up to 10 items, including zero-duration closures; ties use the lowest item number first. Hover over dates for exact UTC timestamps.</p>
+<p class="analytics-help">Issues and PRs closed in the selected period, ranked separately by elapsed time from creation to their final closure recorded at fetch. Bot-authored and spam-labelled items are excluded, as are items open at fetch. Only items with proof of additional interaction are included: a comment or submitted PR review by someone other than the original author (excluding bot accounts), a linked main-targeting PR on an issue, or a merged PR. Evidence reflects the latest collection, even if it occurred outside the selected period. Additional interaction is required only for these lists; age and duration distributions still include other age-eligible items. Each list shows up to 10 items, including zero-duration closures; ties use the lowest item number first. Hover over dates for exact UTC timestamps.</p>
 <div class="ranking-grid">${rankingCards}</div>
 </section>
 <div class="footer"><p>Reconstructed from creation, close, reopen, and merge events in GitHub’s public API. Issues exclude pull requests; only PRs targeting main are included, and draft PRs count as open. Weekly samples use end of day UTC; intraday samples use UTC hour boundaries and selection endpoints. The latest snapshot is ${history.asOf.replace("T", " ").replace(/\.\d+Z$/, " UTC")}. Weeks are anchored to that last date, with a shorter first interval if needed. Available items include transferred history; deleted or inaccessible items and historical repository membership cannot be reconstructed. ${history.fallbackClosures ? `Final closure timestamps supplement timeline timestamps for ${history.fallbackClosures} items. ` : ""}Hover for values; drag to zoom; click a legend label to toggle a series.</p></div>

@@ -116,13 +116,12 @@ export function buildHistory(snapshot) {
     closures: [],
     issueActivity: [],
     prActivity: [],
-    openIssueAges: [],
-    openPRAges: [],
-    ageAsOf: snapshot.fetchedAt || snapshot.asOf,
+    openIssueCreated: [],
+    openPRCreated: [],
   };
   let fallbackClosures = 0;
   for (const item of relevant) {
-    const { created, transitions, fallback } = lifecycle(item, asOf);
+    const { transitions, fallback } = lifecycle(item, asOf);
     if (fallback) fallbackClosures++;
     for (const transition of transitions) {
       changes.push({
@@ -130,13 +129,33 @@ export function buildHistory(snapshot) {
         kind: item.kind,
         delta: transition.delta,
       });
-      const activity = item.kind === "issue" ? analytics.issueActivity : analytics.prActivity;
-      activity.push(transition);
     }
-    // Only the final status transition contributes a closure-duration sample.
-    // All transitions above remain available for historical counts and flow.
-    const latest = transitions.at(-1);
-    if (latest.type === "closed" && eligibleForAges(item))
+  }
+  // Ages use the state observed during scraping, including changes after the
+  // collection start. Intermediate closures never split or reset an item's age.
+  const ageAt = timestamp(snapshot.fetchedAt || snapshot.asOf);
+  for (const item of items) {
+    if (timestamp(item.createdAt) > ageAt) continue;
+    const { created, open, transitions } = lifecycle(item, ageAt);
+    // Turnaround counts original creation and, for currently closed items,
+    // final closure only. Full transitions above still reconstruct the backlog.
+    const activity = item.kind === "issue" ? analytics.issueActivity : analytics.prActivity;
+    activity.push({ at: created, type: "created", delta: 1 });
+    const currentlyOpen = item.state === undefined ? open : item.state === "OPEN";
+    if (currentlyOpen) {
+      const creations =
+        item.kind === "issue" ? analytics.openIssueCreated : analytics.openPRCreated;
+      if (eligibleForAges(item)) creations.push(created);
+      continue;
+    }
+    // closedAt is authoritative when imported timeline events are incomplete
+    // or differ from the final closure timestamp by a second.
+    const closed = item.closedAt
+      ? timestamp(item.closedAt)
+      : transitions.findLast((transition) => transition.type === "closed")?.at;
+    if (closed >= created && closed <= ageAt) {
+      activity.push({ at: closed, type: "closed", delta: -1 });
+      if (!eligibleForAges(item)) continue;
       analytics.closures.push({
         number: item.number,
         title: item.title,
@@ -147,18 +166,8 @@ export function buildHistory(snapshot) {
         kind: item.kind,
         ...(item.kind === "pr" ? { targetBranch: item.targetBranch } : {}),
         created,
-        at: latest.at,
+        at: closed,
       });
-  }
-  const ageAt = timestamp(analytics.ageAsOf);
-  for (const item of items) {
-    if (!eligibleForAges(item)) continue;
-    if (timestamp(item.createdAt) > ageAt) continue;
-    const { created, open } = lifecycle(item, ageAt);
-    if (open) {
-      const ages =
-        item.kind === "issue" ? analytics.openIssueAges : analytics.openPRAges;
-      ages.push((ageAt - created) / DAY);
     }
   }
   analytics.closures.sort((a, b) => a.at - b.at);

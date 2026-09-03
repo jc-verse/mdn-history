@@ -1,7 +1,9 @@
 // Embedded in the offline HTML report alongside the tested calculations.
 export function mountStatistics(history, summarize, select, react) {
   const number = (value) =>
-    value.toLocaleString("en-US", { maximumSignificantDigits: 4 });
+    value.toLocaleString("en-US", Number.isInteger(value)
+      ? { maximumFractionDigits: 0 }
+      : { maximumSignificantDigits: 4 });
   const duration = (days) => {
     if (days === null) return "—";
     if (days < 1 / 1440) return `${number(days * 86400)} s`;
@@ -145,21 +147,17 @@ export function mountStatistics(history, summarize, select, react) {
       },
     );
   };
-  // Ages describe the saved fetch and stay fixed when the selected period moves.
-  distribution(
-    "age-issues",
-    summarize(history.analytics.openIssueAges),
-    "#168273",
-    "No open issues at fetch",
-  );
-  distribution(
-    "age-prs",
-    summarize(history.analytics.openPRAges),
-    "#7b57b5",
-    "No open PRs at fetch",
-  );
   return (range) => {
     const stats = select(history.analytics, range, summarize);
+    for (const [id, summary, color, label] of [
+      ["age-issues", stats.openIssueAges, "#168273", "issues"],
+      ["age-prs", stats.openPRAges, "#7b57b5", "PRs"],
+    ]) {
+      document.querySelector(`#${id}-scope`).textContent = range
+        ? `At selection end: ${new Date(range.end).toISOString().replace("T", " ").replace(/(?:\.000)?Z$/, " UTC")}`
+        : "No selection within collected history";
+      distribution(id, summary, color, `No open ${label} at selection end`);
+    }
     for (const kind of ["issue", "pr"])
       for (const order of ["longest", "shortest"])
         ranking(kind, order, stats.rankings[kind][order]);
@@ -179,28 +177,21 @@ export function mountStatistics(history, summarize, select, react) {
       value === null
         ? "—"
         : `${value > 0 ? "+" : value < 0 ? "−" : ""}${number(Math.abs(value))}`;
-    for (const [kind, prefix, flow] of [
-      ["issues", "flow", stats.flow],
-      ["prs", "pr-flow", stats.prFlow],
-    ]) {
+    for (const kind of ["issues", "prs"]) {
       for (const [id, key] of [
         ["total", "total"],
         ["day", "perDay"],
         ["week", "perWeek"],
         ["month", "perMonth"],
       ]) {
-        document.querySelector(`#${prefix}-${id}`).textContent = range
-          ? signed(key === "total" ? flow.net : flow[key])
-          : "—";
-        for (const direction of ["opened", "closed"]) {
+        for (const direction of ["opened", "closed", "net"]) {
           const value = stats.turnaround[kind][direction][key];
           document.querySelector(`#turnaround-${kind}-${direction}-${id}`).textContent =
-            range && value !== null ? number(value) : "—";
+            range && value !== null
+              ? (direction === "net" ? signed(value) : number(value))
+              : "—";
         }
       }
-      document.querySelector(`#${prefix}-detail`).textContent = !range
-        ? "This selection is outside the collected history."
-        : `${flow.created.toLocaleString("en-US")} created + ${flow.reopened.toLocaleString("en-US")} reopened − ${flow.closed.toLocaleString("en-US")} closures over ${number(flow.days)} days.${flow.days === 0 ? " Average rates require a nonzero interval." : ""}`;
     }
   };
 }

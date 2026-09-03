@@ -119,7 +119,7 @@ test("time-to-close uses only the latest status change, excluding reopened items
   assert.equal(select(data, 6, 6).prs.average, 6);
   assert.equal(select(data, 1, 1).prs.count, 0);
   assert.ok(data.analytics.closures.every((closure) => closure.number !== 8));
-  assert.equal(stats.flow.closed, 4, "historical activity retains every real closure");
+  assert.equal(stats.flow.closed, 1, "turnaround uses the same final-closure rule as durations");
   assert.deepEqual(select(data, 2.1, 2.9).rankings.issue.longest, []);
   assert.equal(
     select(data, 1, 1).issues.average,
@@ -148,8 +148,10 @@ test("bot-authored and spam-labelled items are excluded from all ages but retain
   });
   const data = history(items);
   const stats = select(data, 0, 10);
-  assert.deepEqual(data.analytics.openIssueAges, [8]);
-  assert.deepEqual(data.analytics.openPRAges, [8]);
+  assert.deepEqual(stats.openIssueAges, summarizeDistribution([8]));
+  assert.deepEqual(stats.openPRAges, summarizeDistribution([8]));
+  assert.deepEqual(select(data, 0, 2).openIssueAges, summarizeDistribution([2, 0]));
+  assert.deepEqual(select(data, 0, 2).openPRAges, summarizeDistribution([2, 0]));
   assert.equal(data.items, 12);
   assert.equal(data.rows.at(-1).openIssues, 3);
   assert.equal(data.rows.at(-1).openPRs, 3);
@@ -162,6 +164,27 @@ test("bot-authored and spam-labelled items are excluded from all ages but retain
     const flow = kind === "issue" ? stats.flow : stats.prFlow;
     assert.equal(flow.created, 6);
     assert.equal(flow.closed, 3);
+  }
+});
+
+test("ages use scraped state and final closure even when items change during collection", () => {
+  for (const kind of ["issue", "pr"]) {
+    const data = history([
+      { ...item(1, kind, 0, [event("ClosedEvent", 2), event("ReopenedEvent", 11)]), state: "OPEN" },
+      { ...item(2, kind, 0, [event("ClosedEvent", 2), event("ReopenedEvent", 3), event("ClosedEvent", 11)], 11), state: "CLOSED" },
+      // The scraped state and closedAt also cover incomplete imported timelines.
+      { ...item(3, kind, 1, [event("ClosedEvent", 4)]), state: "OPEN" },
+      { ...item(4, kind, 1, [event("ClosedEvent", 5)], 5 + 1 / 86400), state: kind === "pr" ? "MERGED" : "CLOSED" },
+      { ...item(5, kind, 11, [], 11.5), state: "CLOSED" },
+    ], 10, 12);
+    assert.deepEqual(select(data, 0, 12)[kind === "issue" ? "openIssueAges" : "openPRAges"], summarizeDistribution([12, 11]));
+    assert.deepEqual(data.analytics.closures.map(({ number }) => number), [4, 2, 5]);
+    const summaryKey = kind === "issue" ? "issues" : "prs";
+    assert.equal(select(data, 2, 2)[summaryKey].count, 0, "superseded closures are excluded from earlier selections");
+    assert.equal(select(data, 0, 10)[summaryKey].count, 1);
+    assert.equal(select(data, 11, 11)[summaryKey].average, 11);
+    assert.equal(select(data, 11.5, 11.5)[summaryKey].average, 0.5);
+    assert.equal(data.analytics.closures[0].at, base + 5 * day + 1000);
   }
 });
 
@@ -267,7 +290,7 @@ test("log histograms disclose zero durations without shifting them to invented p
   );
 });
 
-test("current open issue ages use fetch time, original creation, and events observed after collection start", () => {
+test("open issue ages use the right boundary and original creation, including items closed later", () => {
   const data = history(
     [
       item(1, "issue", 0, [event("ClosedEvent", 11)], 11),
@@ -283,21 +306,23 @@ test("current open issue ages use fetch time, original creation, and events obse
     10,
     12,
   );
-  assert.equal(data.analytics.ageAsOf, at(12));
-  assert.deepEqual(data.analytics.openIssueAges, [11, 1, 0]);
+  assert.deepEqual(select(data, 0, 12).openIssueAges, summarizeDistribution([11, 1, 0]));
   assert.equal(
     data.rows.at(-1).openIssues,
     1,
     "backlog chart still ends at collection start",
   );
-  const savedAges = [...data.analytics.openIssueAges];
-  select(data, 0, 1);
-  select(data, 5, 10);
-  assert.deepEqual(data.analytics.openIssueAges, savedAges);
-  assert.equal(summarizeDistribution(savedAges).average, 4);
+  assert.deepEqual(select(data, 0, 1).openIssueAges, summarizeDistribution([1, 0]));
+  assert.deepEqual(select(data, 5, 10).openIssueAges, summarizeDistribution([10, 9]));
+  assert.deepEqual(select(data, 10, 10).openIssueAges, select(data, 0, 10).openIssueAges,
+    "the left boundary never limits the age population");
+  assert.deepEqual(select(data, 11, 11).openIssueAges, summarizeDistribution([10, 0]),
+    "creation is inclusive and final closure is exclusive at the right boundary");
+  assert.deepEqual(select(data, 0, 0).openIssueAges, summarizeDistribution([0]));
+  assert.deepEqual(select(data, null).openIssueAges, summarizeDistribution([]));
 });
 
-test("open PR ages include drafts and reopenings but exclude merged and closed PRs at fetch", () => {
+test("open PR ages update at the selection end, including drafts and ignoring intermediate closures", () => {
   const data = history(
     [
       { ...item(1, "pr", 1), isDraft: true },
@@ -317,16 +342,46 @@ test("open PR ages include drafts and reopenings but exclude merged and closed P
     10,
     12,
   );
-  assert.deepEqual(data.analytics.openPRAges, [11, 8, 1]);
-  assert.deepEqual(data.analytics.openIssueAges, [11]);
-  assert.equal(summarizeDistribution(data.analytics.openPRAges).median, 8);
-  select(data, 0, 1);
-  select(data, 5, 10);
-  assert.deepEqual(data.analytics.openPRAges, [11, 8, 1]);
-  assert.deepEqual(history([]).analytics.openPRAges, []);
+  assert.deepEqual(select(data, 0, 12).openPRAges, summarizeDistribution([11, 8, 1]));
+  assert.deepEqual(select(data, 0, 12).openIssueAges, summarizeDistribution([11]));
+  assert.deepEqual(select(data, 0, 1).openPRAges, summarizeDistribution([0]));
+  assert.deepEqual(select(data, 5, 10).openPRAges, summarizeDistribution([9, 8, 6]));
+  assert.deepEqual(select(data, 5, 8).openPRAges, summarizeDistribution([7, 6, 5, 4]));
+  assert.deepEqual(select(data, 0, 11).openPRAges, summarizeDistribution([10, 7, 0]));
+  assert.deepEqual(select(history([]), 0, 10).openPRAges, summarizeDistribution([]));
 });
 
-test("net issue rates include creations, reopenings and all actual closures, with partial-day and zero-span handling", () => {
+test("turnaround ignores reopenings and superseded closures across selections for issues and PRs", () => {
+  for (const kind of ["issue", "pr"]) {
+    const data = history([
+      { ...item(1, kind, 0, [
+        event("ClosedEvent", 2), event("ReopenedEvent", 3),
+        event("ClosedEvent", 4), event("ReopenedEvent", 11),
+      ]), state: "OPEN" },
+      { ...item(2, kind, 0, [
+        event("ClosedEvent", 2), event("ReopenedEvent", 3),
+        event("ClosedEvent", 11),
+      ], 11), state: kind === "pr" ? "MERGED" : "CLOSED" },
+    ], 10, 12);
+    const key = kind === "issue" ? "issues" : "prs";
+    for (const [start, end] of [[2, 2], [3, 3], [2, 10]]) {
+      const stats = select(data, start, end).turnaround[key];
+      assert.equal(stats.opened.total, 0, "reopening never counts as opening");
+      assert.equal(stats.closed.total, 0, "only the final closure at fetch counts");
+      assert.equal(stats.net.total, 0);
+    }
+    assert.equal(select(data, 0, 0).turnaround[key].opened.total, 2);
+    const final = select(data, 11, 11).turnaround[key];
+    assert.equal(final.opened.total, 0);
+    assert.equal(final.closed.total, 1);
+    assert.equal(final.net.total, -1);
+    assert.equal(select(data, 0, 12).turnaround[key].opened.total, 2);
+    assert.equal(data.timeline.at(-1)[kind === "issue" ? "openIssues" : "openPRs"], 1,
+      "historical backlog still uses real transitions up to collection start");
+  }
+});
+
+test("net issue rates count original creations and final closures, with partial-day and zero-span handling", () => {
   const data = history([
     item(
       1,
@@ -343,16 +398,15 @@ test("net issue rates include creations, reopenings and all actual closures, wit
     item(3, "issue", 0, [event("ClosedEvent", 3.5)], 3.5),
     item(4, "pr", 3),
   ]);
-  const balanced = select(data, 3, 3.5).flow;
-  assert.deepEqual(balanced, {
+  const selected = select(data, 3, 3.5).flow;
+  assert.deepEqual(selected, {
     created: 1,
-    reopened: 1,
     closed: 2,
-    net: 0,
+    net: -1,
     days: 0.5,
-    perDay: 0,
-    perWeek: 0,
-    perMonth: 0,
+    perDay: -2,
+    perWeek: -14,
+    perMonth: -60,
   });
   const falling = select(data, 3.1, 3.6).flow;
   assert.equal(falling.net, -2);
@@ -360,10 +414,10 @@ test("net issue rates include creations, reopenings and all actual closures, wit
   assert.equal(falling.perWeek, -28);
   assert.equal(falling.perMonth, -120);
   const growing = select(data, 2.5, 3).flow;
-  assert.equal(growing.net, 2);
-  assert.equal(growing.perDay, 4);
+  assert.equal(growing.net, 1);
+  assert.equal(growing.perDay, 2);
   const instant = select(data, 3, 3).flow;
-  assert.equal(instant.net, 2);
+  assert.equal(instant.net, 1);
   assert.equal(instant.perDay, null);
   assert.equal(instant.perMonth, null);
   assert.equal(select(data, 5, 6).flow.perDay, 0);
@@ -384,10 +438,10 @@ test("empty histories and closures after the selected snapshot do not manufactur
     12,
   );
   assert.equal(select(data, 0, 10).issues.count, 0);
-  assert.deepEqual(data.analytics.openIssueAges, []);
+  assert.deepEqual(select(data, 0, 10).openIssueAges, summarizeDistribution([10]));
 });
 
-test("PR net change and turnaround count actual activity separately across all four spans", () => {
+test("PR net change and turnaround count original creations and final closures across all four spans", () => {
   const data = history([
     item(1, "pr", 0, [
       event("ClosedEvent", 1),
@@ -402,17 +456,19 @@ test("PR net change and turnaround count actual activity separately across all f
   ]);
   const stats = select(data, 3, 3.5);
   assert.deepEqual(stats.prFlow, {
-    created: 1, reopened: 1, closed: 2, net: 0, days: 0.5,
-    perDay: 0, perWeek: 0, perMonth: 0,
+    created: 1, closed: 2, net: -1, days: 0.5,
+    perDay: -2, perWeek: -14, perMonth: -60,
   });
   assert.deepEqual(stats.turnaround, {
     issues: {
       opened: { total: 1, perDay: 2, perWeek: 14, perMonth: 60 },
       closed: { total: 1, perDay: 2, perWeek: 14, perMonth: 60 },
+      net: { total: 0, perDay: 0, perWeek: 0, perMonth: 0 },
     },
     prs: {
-      opened: { total: 2, perDay: 4, perWeek: 28, perMonth: 120 },
+      opened: { total: 1, perDay: 2, perWeek: 14, perMonth: 60 },
       closed: { total: 2, perDay: 4, perWeek: 28, perMonth: 120 },
+      net: { total: -1, perDay: -2, perWeek: -14, perMonth: -60 },
     },
   });
   const falling = select(data, 3.1, 3.6);
@@ -422,10 +478,15 @@ test("PR net change and turnaround count actual activity separately across all f
   assert.equal(falling.prFlow.perMonth, -120);
   assert.equal(falling.turnaround.prs.opened.total, 0);
   assert.equal(falling.turnaround.prs.closed.total, 2);
+  assert.deepEqual(falling.turnaround.prs.net, {
+    total: -2, perDay: -4, perWeek: -28, perMonth: -120,
+  });
   const instant = select(data, 3, 3);
-  assert.equal(instant.prFlow.net, 2);
-  assert.equal(instant.turnaround.prs.opened.total, 2);
+  assert.equal(instant.prFlow.net, 1);
+  assert.equal(instant.turnaround.prs.opened.total, 1);
   assert.equal(instant.turnaround.prs.opened.perDay, null);
+  assert.equal(instant.turnaround.prs.net.total, 1);
+  assert.equal(instant.turnaround.prs.net.perDay, null);
   assert.equal(instant.turnaround.issues.closed.perMonth, null);
   assert.equal(select(data, null).prFlow.perWeek, null);
   assert.equal(select(data, null).turnaround.prs.closed.perDay, null);
@@ -435,6 +496,6 @@ test("PR net change and turnaround count actual activity separately across all f
   assert.equal(quiet.turnaround.prs.closed.perMonth, 0);
   const full = select(data, 0, 10);
   assert.equal(full.prFlow.net, data.rows.at(-1).openPRs);
-  assert.equal(full.prFlow.closed, 3, "reclosures count, duplicate merges and future events do not");
-  assert.equal(full.turnaround.prs.opened.perDay, 0.5, "inactive days contribute to the denominator");
+  assert.equal(full.prFlow.closed, 2, "only final closures count; duplicate merges and future events do not");
+  assert.equal(full.turnaround.prs.opened.perDay, 0.4, "inactive days contribute to the denominator");
 });
