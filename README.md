@@ -48,7 +48,9 @@ npm test
 
 Cache files and generated outputs are ignored by Git. Do not run two collectors against the same cache simultaneously. A completed snapshot is published atomically to `snapshot.json`; failed refreshes leave it available with `--offline`. Initial downloads checkpoint pages, and incremental refreshes checkpoint completed timelines in `refresh.json`. On retry, incremental listings restart at the newest record because update ordering can move; unchanged checkpointed timelines are reused. Interrupted work from an earlier UTC date restarts automatically, so a normal run ends on today's date. Offline mode retains and displays the original snapshot date.
 
-Incremental refreshes cannot discover deletions, transfers out of the repository, or records that become accessible without a recent update timestamp. Use `--fresh` to reconcile the entire cache with GitHub's currently available records.
+After the incremental refresh, the collector reconciles cached open issues against GitHub's current open-issue list. This lists only IDs, numbers, states, and update timestamps, 100 open issues per page (three pages for 296 issues). Unchanged items reuse their cached timelines. New or changed open issues receive targeted updates. Each cached open issue missing from the list is checked individually: a closed issue gets its final lifecycle history, an issue no longer accessible in `mdn/content` is removed, and an issue still open is retained. This catches transfers out and deletions without scanning the full issue history.
+
+Reconciliation updates and removals are checkpointed. Lookup, permission, and rate-limit failures leave the last published snapshot intact; only an explicit missing issue or a confirmed different repository permits removal. This check covers cached open issues, not already-closed issues or PRs. Use `--fresh` to reconcile the entire cache, including departed closed items and older records that become accessible without a recent update timestamp.
 
 ## Daily GitHub sync
 

@@ -646,6 +646,8 @@ test("refreshes only recent records, merging creations, closures, reopens and me
   const details = [];
   const listings = [];
   options.client = async (query, variables) => {
+    if (query.includes("states:OPEN"))
+      return response("issues", [records.get(2), records.get(4)]);
     if (variables.ids && Object.hasOwn(variables, "interactionCursor"))
       return { nodes: variables.ids.map((id) => record(Number(id.slice(3)))) };
     if (variables.ids) {
@@ -813,6 +815,8 @@ test("refresh retargeting removes old PRs and includes incoming PRs, with resuma
   const before = readSnapshot(options.directory);
   let fail = true;
   options.client = async (query, variables) => {
+    if (query.includes("states:OPEN"))
+      return response("issues", [1, 2].map((number) => ({ ...record(number), updatedAt: "2026-08-30T12:00:00Z" })));
     if (variables.ids) {
       assert.deepEqual(variables.ids, ["id-4"], "outgoing PR needs no details");
       return { nodes: [record(4)] };
@@ -841,6 +845,7 @@ test("failed refresh preserves the published snapshot and retries from the head 
   const details = [];
   const listings = [];
   options.client = async (query, variables) => {
+    if (query.includes("states:OPEN")) return response("issues", [record(1), record(2)]);
     if (variables.ids && Object.hasOwn(variables, "interactionCursor"))
       return { nodes: variables.ids.map((id) => record(Number(id.slice(3)))) };
     if (variables.ids) {
@@ -928,5 +933,140 @@ test("invalid update timestamps and repeated cursors never publish partial refre
       invalidTimestamp ? /update timestamp/ : /repeated page cursor/,
     );
     assert.deepEqual(readSnapshot(options.directory), before);
+  }
+});
+
+test("reconciliation lists only open issues in cheap pages and reuses unchanged histories", async (t) => {
+  const options = await seedCache(t);
+  const previous = readSnapshot(options.directory);
+  const source = previous.items[0];
+  previous.items = [
+    ...Array.from({ length: 205 }, (_, i) => ({ ...source, number: i + 10 })),
+    { ...source, number: 900, state: "CLOSED", closedAt: date },
+    previous.items[2],
+  ];
+  fs.writeFileSync(path.join(options.directory, "snapshot.json"), JSON.stringify(previous));
+  let pages = 0;
+  options.client = async (query, variables) => {
+    assert.ok(!variables.ids && !variables.number, "unchanged issues need no details or individual lookups");
+    if (!query.includes("states:OPEN"))
+      return response(query.includes("pullRequests(first:") ? "pullRequests" : "issues", []);
+    assert.match(query, /issues\(first:100, states:OPEN/);
+    assert.doesNotMatch(query, /timelineItems|interactionItems|labels|title/);
+    const start = Number(variables.cursor || 0);
+    const numbers = previous.items.slice(start, Math.min(start + 100, 205));
+    pages++;
+    return response("issues", numbers.map((item) => ({
+      id: `id-${item.number}`, number: item.number, state: item.state, updatedAt: item.updatedAt,
+    })), start + 100 < 205, String(start + 100));
+  };
+  const result = await collect(options);
+  assert.equal(pages, 3);
+  assert.deepEqual(result.items, previous.items);
+});
+
+test("reconciliation repairs closures, transfers and deletions with resumable targeted checks", async (t) => {
+  const options = await seedCache(t);
+  const previous = readSnapshot(options.directory);
+  const source = previous.items[0];
+  previous.items.push(...[4, 5, 6].map((number) => ({ ...source, number })));
+  previous.items.push({ ...source, number: 8, state: "CLOSED", closedAt: date });
+  const snapshotPath = path.join(options.directory, "snapshot.json");
+  fs.writeFileSync(snapshotPath, JSON.stringify(previous));
+  const old = (number) => ({ ...record(number), updatedAt: source.updatedAt });
+  const closed = { ...record(1), state: "CLOSED", closedAt: date,
+    timelineItems: { nodes: [{ __typename: "ClosedEvent", createdAt: date }], pageInfo: pageInfo(false, null) } };
+  const lookups = [];
+  const details = [];
+  let fail = true;
+  options.client = async (query, variables, settings) => {
+    if (query.includes("states:OPEN")) return response("issues", [record(7), record(8)]);
+    if (variables.ids) {
+      if (!Object.hasOwn(variables, "interactionCursor")) details.push(...variables.ids);
+      return { nodes: variables.ids.map((id) => id === "id-1" ? closed : record(Number(id.slice(3)))) };
+    }
+    if (variables.number) {
+      assert.equal(settings.allowMissingIssue, true);
+      lookups.push(variables.number);
+      if (variables.number === 4 && fail) throw new Error("rate limited during reconciliation");
+      const current = {
+        1: { ...closed, repository: { nameWithOwner: "mdn/content" } },
+        // Transferred and deleted issues both return null in the old repository.
+        2: null,
+        4: { ...old(104), repository: { nameWithOwner: "mdn/data" } },
+        // Still open: omission during pagination must never cause deletion.
+        5: { ...old(5), repository: { nameWithOwner: "mdn/content" } },
+        6: null,
+      };
+      assert.ok(Object.hasOwn(current, variables.number));
+      return { repository: { issue: current[variables.number] } };
+    }
+    return response(query.includes("pullRequests(first:") ? "pullRequests" : "issues", []);
+  };
+  await assert.rejects(collect(options), /rate limited during reconciliation/);
+  assert.deepEqual(readSnapshot(options.directory), previous, "failed reconciliation cannot publish partial removals");
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(options.directory, "refresh.json")));
+  assert.deepEqual(checkpoint.removedNumbers, [2]);
+  assert.equal(checkpoint.items.find((item) => item.number === 1).state, "CLOSED");
+  assert.deepEqual(details, ["id-7", "id-8", "id-1"]);
+  fail = false;
+  details.length = 0;
+  lookups.length = 0;
+  const result = await collect(options);
+  assert.deepEqual(details, [], "completed timeline downloads are reused on retry");
+  assert.deepEqual(lookups, [4, 5, 6], "confirmed departures and closures are checkpointed");
+  assert.deepEqual(result.items.map((item) => item.number).sort((a, b) => a - b), [1, 3, 5, 7, 8]);
+  assert.deepEqual(result.items.find((item) => item.number === 1).events, [{ type: "ClosedEvent", at: date }]);
+  assert.equal(result.items.find((item) => item.number === 8).state, "OPEN");
+  assert.equal(result.streams.issues.total, 4);
+  assert.equal(buildHistory(result).rows.at(-1).openIssues, 3);
+  assert.deepEqual(readSnapshot(options.directory), result);
+  assert.equal(fs.existsSync(path.join(options.directory, "refresh.json")), false);
+});
+
+test("only explicit issue-field NOT_FOUND errors can be treated as absent", async () => {
+  const missing = { type: "NOT_FOUND", path: ["repository", "issue"], message: "Issue not found" };
+  let body = { data: { repository: { issue: null } }, errors: [missing] };
+  const client = createClient("test-token", async () => new Response(JSON.stringify(body), { status: 200 }));
+  const settings = { allowMissingIssue: true };
+  assert.deepEqual(await client("query", {}, settings), { repository: { issue: null } });
+  await assert.rejects(client("query"), /Issue not found/, "other queries must remain strict");
+  for (const error of [
+    { ...missing, type: "FORBIDDEN" },
+    { ...missing, type: "RATE_LIMITED" },
+    { ...missing, path: ["repository"] },
+    { ...missing, path: ["repository", "issues"] },
+  ]) {
+    body = { data: { repository: { issue: null } }, errors: [error] };
+    await assert.rejects(client("query", {}, settings), /Issue not found/);
+  }
+  body = { data: { repository: null }, errors: [missing] };
+  await assert.rejects(client("query", {}, settings), /Issue not found/);
+  body = { data: { repository: { issue: null } }, errors: [missing, { message: "rate limit exceeded" }] };
+  await assert.rejects(client("query", {}, settings), /rate limit exceeded/);
+});
+
+test("invalid reconciliation pages and lookups cannot remove items or replace a snapshot", async (t) => {
+  for (const invalid of ["cursor", "nodes", "timestamp", "state", "repository", "lookup", "lookup-error"]) {
+    const options = await seedCache(t);
+    const previous = readSnapshot(options.directory);
+    options.client = async (query, variables) => {
+      if (query.includes("states:OPEN")) {
+        if (invalid === "cursor") return response("issues", [], true, "same");
+        if (invalid === "nodes") return response("issues", null);
+        if (invalid === "timestamp") return response("issues", [{ ...record(1), updatedAt: null }]);
+        if (invalid === "state") return response("issues", [{ ...record(1), state: "CLOSED" }]);
+        return response("issues", []);
+      }
+      if (variables.number) {
+        if (invalid === "repository") return { repository: null };
+        if (invalid === "lookup") return { repository: { issue: {} } };
+        throw new Error("permission denied");
+      }
+      return response(query.includes("pullRequests(first:") ? "pullRequests" : "issues", []);
+    };
+    await assert.rejects(collect(options), /open-issue|issue lookup|permission denied/);
+    assert.deepEqual(readSnapshot(options.directory), previous);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.directory, "refresh.json"))).removedNumbers, []);
   }
 });

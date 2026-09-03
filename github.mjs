@@ -27,7 +27,7 @@ export function githubToken() {
 }
 
 export function createClient(token, fetcher = fetch) {
-  return async (query, variables = {}) => {
+  return async (query, variables = {}, { allowMissingIssue = false } = {}) => {
     // Never print or persist the token, request headers, or full response bodies.
     for (let attempt = 0; attempt < 4; attempt++) {
       let response;
@@ -79,9 +79,19 @@ export function createClient(token, fetcher = fetch) {
         );
         continue;
       }
-      if (result.errors?.length)
+      // A repository-scoped issue lookup returns NOT_FOUND for deleted or
+      // transferred issues. Only that exact field may be treated as absent;
+      // permission, rate-limit, repository and partial-response errors still fail.
+      const errors = result.errors?.filter((error) => !(
+        allowMissingIssue &&
+        error.type === "NOT_FOUND" &&
+        error.path?.length === 2 &&
+        error.path[0] === "repository" && error.path[1] === "issue" &&
+        result.data?.repository?.issue === null
+      ));
+      if (errors?.length)
         throw new Error(
-          `GitHub: ${result.errors.map((e) => e.message).join("; ")}. Progress is saved.`,
+          `GitHub: ${errors.map((e) => e.message).join("; ")}. Progress is saved.`,
         );
       if (!result.data) throw new Error("GitHub returned no data.");
       return result.data;
@@ -538,6 +548,26 @@ async function refreshSnapshot(
   if (failure) throw failure.reason;
   for (const item of refreshed.values()) cached.set(item.number, item);
   for (const number of removed) cached.delete(number);
+  const saveReconciliation = () => {
+    checkpoint.items = [...refreshed.values()];
+    checkpoint.removedNumbers = [...removed];
+    writeJSON(checkpointPath, checkpoint);
+  };
+  await reconcileOpenIssues({
+    client, cached, log,
+    saveItem(item) {
+      cached.set(item.number, item);
+      refreshed.set(item.number, item);
+      removed.delete(item.number);
+      saveReconciliation();
+    },
+    removeItem(number) {
+      cached.delete(number);
+      refreshed.delete(number);
+      removed.add(number);
+      saveReconciliation();
+    },
+  });
   const items = [...cached.values()].filter(includedItem);
   for (const [stream, kind] of [["issues", "issue"], ["pullRequests", "pr"]])
     streams[stream].total = items.filter((item) => item.kind === kind).length;
@@ -550,6 +580,91 @@ async function refreshSnapshot(
     streams,
     items,
   };
+}
+
+async function reconcileOpenIssues({ client, cached, saveItem, removeItem, log }) {
+  const open = new Map();
+  const cursors = new Set();
+  let cursor = null;
+  let pages = 0;
+  // Only list open issues, with scalar fields. Timelines are fetched solely for
+  // changed/new records or a missing cached issue confirmed to have closed.
+  do {
+    const data = await client(`query OpenIssues($cursor:String) {
+      repository(owner:"mdn", name:"content") {
+        issues(first:100, states:OPEN, after:$cursor, orderBy:{field:CREATED_AT,direction:ASC}) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id number updatedAt state }
+        }
+      }
+    }`, { cursor });
+    const page = data.repository?.issues;
+    if (!page?.pageInfo || typeof page.pageInfo.hasNextPage !== "boolean" ||
+        !Array.isArray(page.nodes) || page.nodes.some((item) =>
+          !item?.id || !Number.isInteger(item.number) || item.state !== "OPEN" ||
+          !Number.isFinite(Date.parse(item.updatedAt))))
+      throw new Error("GitHub returned invalid open-issue pagination or metadata.");
+    for (const item of page.nodes) open.set(item.number, item);
+    pages++;
+    if (!page.pageInfo.hasNextPage) break;
+    cursor = page.pageInfo.endCursor;
+    if (!cursor || cursors.has(cursor))
+      throw new Error("GitHub returned a missing or repeated open-issue cursor.");
+    cursors.add(cursor);
+  } while (true);
+
+  let checked = 0;
+  let removed = 0;
+  let updated = 0;
+  const refresh = async (nodes) => {
+    const details = await fetchDetails(client, nodes, "issues");
+    for (const item of await completeItems(client, details, "issues")) {
+      saveItem(item);
+      updated++;
+    }
+  };
+  // Also catch reopenings/new issues seen after the ordinary update listing.
+  const changed = [...open.values()].filter((item) => {
+    const saved = cached.get(item.number);
+    return !saved || saved.state !== "OPEN" || saved.updatedAt !== item.updatedAt;
+  });
+  for (let start = 0; start < changed.length; start += 100)
+    await refresh(changed.slice(start, start + 100));
+
+  for (const item of [...cached.values()]) {
+    if (item.kind !== "issue" || item.state !== "OPEN" || open.has(item.number)) continue;
+    // A missing list entry alone is not evidence of a transfer/deletion: it
+    // might have closed, or the listing may have moved while being paginated.
+    const data = await client(`query MissingOpenIssue($number:Int!) {
+      repository(owner:"mdn", name:"content") {
+        issue(number:$number) { id number state updatedAt repository { nameWithOwner } }
+      }
+    }`, { number: item.number }, { allowMissingIssue: true });
+    checked++;
+    if (!data.repository || !Object.hasOwn(data.repository, "issue"))
+      throw new Error("GitHub returned no repository-scoped issue lookup.");
+    const current = data.repository.issue;
+    if (current === null) {
+      removeItem(item.number);
+      removed++;
+      continue;
+    }
+    if (!current.id || !Number.isInteger(current.number) ||
+        !["OPEN", "CLOSED"].includes(current.state) ||
+        !Number.isFinite(Date.parse(current.updatedAt)) ||
+        typeof current.repository?.nameWithOwner !== "string")
+      throw new Error("GitHub returned invalid issue lookup metadata.");
+    if (current.repository.nameWithOwner !== REPOSITORY) {
+      removeItem(item.number);
+      removed++;
+    } else {
+      if (current.number !== item.number)
+        throw new Error("GitHub returned a mismatched issue number.");
+      if (current.state !== item.state || current.updatedAt !== item.updatedAt)
+        await refresh([current]);
+    }
+  }
+  log(`Open issues: ${pages} listing pages, ${checked} missing records checked, ${updated} timelines refreshed, ${removed} departed records removed.`);
 }
 
 async function collectFull({
